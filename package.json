@@ -18,7 +18,7 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "keyveyn",
+        "owner": "veynkey",
         "repo": "finpulse"
       }
     ],
