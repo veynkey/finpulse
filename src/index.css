@@ -1,0 +1,111 @@
+@import "tailwindcss";
+
+@theme {
+  --color-background: #0a0a0a;
+  --color-surface: #111111;
+  --color-border: #2a2a2a;
+  --color-text: #eaeaea;
+  --color-muted: #888888;
+  --color-accent: #2962ff;
+  --color-up: #00c853;
+  --color-down: #ff3d00;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html, body {
+  color-scheme: dark;
+  background-color: var(--color-background);
+  color: var(--color-text);
+  font-family: monospace;
+  overflow: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+/* Universal Dark Terminal Scrollbars (Firefox & Standard CSS) */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #262c38 #0c0e14;
+}
+
+/* Chromium / WebView2 / WebKit Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #0c0e14;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #232834;
+  border-radius: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3a4254;
+}
+
+::-webkit-scrollbar-corner {
+  background: #0c0e14;
+}
+
+::-webkit-scrollbar-button {
+  display: none !important;
+  width: 0 !important;
+  height: 0 !important;
+}
+
+/* React Grid Layout Overrides for dark theme */
+.react-grid-item.react-grid-placeholder {
+  background: var(--color-accent) !important;
+  opacity: 0.2 !important;
+}
+.react-resizable-handle {
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+.react-grid-item:hover .react-resizable-handle {
+  opacity: 1;
+}
+
+/* Terminal Density Profiles (COM / PRO / ULT) */
+[data-density="compact"] {
+  --terminal-base-font: 12.5px;
+}
+
+[data-density="professional"] {
+  --terminal-base-font: 12px;
+}
+
+[data-density="ultra"] {
+  --terminal-base-font: 11px;
+}
+
+[data-density="ultra"] .flexlayout__tab_button {
+  padding: 2px 7px !important;
+  font-size: 10px !important;
+}
+
+[data-density="ultra"] table th,
+[data-density="ultra"] table td {
+  padding-top: 2px !important;
+  padding-bottom: 2px !important;
+}
+
+[data-density="compact"] .flexlayout__tab_button {
+  padding: 5px 14px !important;
+  font-size: 11.5px !important;
+}
+
+[data-density="compact"] table th,
+[data-density="compact"] table td {
+  padding-top: 6px !important;
+  padding-bottom: 6px !important;
+}
+

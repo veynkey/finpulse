@@ -1,0 +1,146 @@
+/* Custom FinPulse Terminal Overrides for FlexLayout */
+@import 'flexlayout-react/style/dark.css';
+
+.flexlayout__layout {
+  --fl-color-background: #07080a;
+  --fl-color-base: #07080a;
+  --fl-color-1: #0c0e14;
+  --fl-color-2: #12151d;
+  --fl-color-3: #181c26;
+  --fl-color-4: #222735;
+  --fl-color-5: #2e3547;
+  --fl-color-6: #3b445b;
+  --fl-color-text: #c0c6d4;
+  --fl-font-size: 11px;
+  --fl-font-family: monospace, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --fl-font-weight: 500;
+  --fl-splitter-size: 4px;
+  --fl-splitter-active-size: 4px;
+  --fl-color-focus: #0070f3;
+  --fl-color-splitter: #12151d;
+  --fl-color-splitter-hover: #0070f3;
+  --fl-color-splitter-drag: #0070f3;
+  --fl-color-tabset-background: #0d0f15;
+  --fl-color-tabset-divider-line: #1c202b;
+  --fl-color-tab-selected-background: #141822;
+  --fl-color-tab-selected: #ffffff;
+  --fl-color-tab-unselected-background: transparent;
+  --fl-color-tab-unselected: #7e8799;
+  --fl-color-drag1: #0070f3;
+  --fl-color-drag2: #00c853;
+  --fl-color-drag1-background: rgba(0, 112, 243, 0.22);
+  --fl-color-drag2-background: rgba(0, 200, 83, 0.22);
+  --fl-color-icon: #8b95a8;
+}
+
+.flexlayout__tab_button {
+  padding: 2px 10px !important;
+  font-family: monospace !important;
+  font-size: 10px !important;
+  letter-spacing: 0.03em;
+  font-weight: 600 !important;
+  border-bottom: 2px solid transparent !important;
+  transition: all 0.15s ease-in-out;
+}
+
+.flexlayout__tab_button--selected {
+  border-bottom: 2px solid #0070f3 !important;
+  color: #ffffff !important;
+  background-color: #141822 !important;
+}
+
+.flexlayout__tab_button:hover {
+  color: #ffffff !important;
+  background-color: rgba(255, 255, 255, 0.04) !important;
+}
+
+.flexlayout__tabset_header {
+  height: 26px !important;
+  min-height: 26px !important;
+  background: #0c0e14 !important;
+  border-bottom: 1px solid #1c202b !important;
+}
+
+.flexlayout__tabset_content {
+  background: #090b0e !important;
+}
+
+.flexlayout__splitter {
+  background-color: #11141c !important;
+  transition: background-color 0.2s ease;
+}
+
+.flexlayout__splitter:hover,
+.flexlayout__splitter--drag {
+  background-color: #0070f3 !important;
+}
+
+.flexlayout__drag_rect {
+  border: 1px solid #0070f3 !important;
+  background-color: rgba(0, 112, 243, 0.25) !important;
+  border-radius: 4px;
+}
+
+/* Per-tabset close button injected via onRenderTabSet */
+.fp-tabset-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  border-radius: 3px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #5a6278;
+  cursor: pointer;
+  transition: color 0.12s ease, background 0.12s ease, border-color 0.12s ease;
+  flex-shrink: 0;
+}
+
+.fp-tabset-close-btn:hover {
+  color: #ff4444;
+  background: rgba(255, 68, 68, 0.12);
+  border-color: rgba(255, 68, 68, 0.25);
+}
+
+.fp-tabset-close-btn:focus-visible {
+  outline: 2px solid #0070f3;
+  outline-offset: 1px;
+}
+
+/* Ensure flexlayout's built-in tab close X is always visible, not just on hover */
+.flexlayout__tab_button_trailing {
+  opacity: 1 !important;
+}
+
+/* Flexlayout scrollbars */
+.flexlayout__tabset_content,
+.flexlayout__tab,
+.flexlayout__border_button {
+  scrollbar-width: thin !important;
+  scrollbar-color: #262c38 #0c0e14 !important;
+}
+
+.flexlayout__tabset_content::-webkit-scrollbar,
+.flexlayout__tab::-webkit-scrollbar {
+  width: 6px !important;
+  height: 6px !important;
+}
+
+.flexlayout__tabset_content::-webkit-scrollbar-track,
+.flexlayout__tab::-webkit-scrollbar-track {
+  background: #0c0e14 !important;
+}
+
+.flexlayout__tabset_content::-webkit-scrollbar-thumb,
+.flexlayout__tab::-webkit-scrollbar-thumb {
+  background: #232834 !important;
+  border-radius: 3px !important;
+}
+
+.flexlayout__tabset_content::-webkit-scrollbar-thumb:hover,
+.flexlayout__tab::-webkit-scrollbar-thumb:hover {
+  background: #3a4254 !important;
+}
+
