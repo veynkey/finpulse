@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useTerminal } from '../context/TerminalContext';
+import { newsService } from '../services/newsService';
 import type { NewsItem, LinkGroup } from '../types';
 import PanelHeader from './PanelHeader';
-import { Flame, Tag, ExternalLink, Search, Image as ImageIcon } from 'lucide-react';
+import { Flame, Tag, ExternalLink, Search, Image as ImageIcon, RefreshCw } from 'lucide-react';
 
 const SOURCE_REGISTRY: Record<string, { label: string; url: string; color: string }> = {
+  'BINANCE NEWS':    { label: 'Binance',               url: 'https://www.binance.com/en/support/announcement',             color: '#f0b90b' },
+  'YAHOO FINANCE':   { label: 'Yahoo Finance',         url: 'https://finance.yahoo.com',                                  color: '#a855f7' },
   'FOMC WIRE':       { label: 'Federal Reserve',      url: 'https://www.federalreserve.gov',                              color: '#22c55e' },
   'COINDESK':        { label: 'CoinDesk',              url: 'https://www.coindesk.com',                                    color: '#f59e0b' },
   'COINTELEGRAPH':   { label: 'CoinTelegraph',         url: 'https://cointelegraph.com',                                   color: '#2563eb' },
@@ -725,11 +728,27 @@ const TAG_FILTERS = ['ALL', 'MACRO', 'CRYPTO', 'EQUITIES', 'FOREX', 'RATES', 'CO
 export default function NewsPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: LinkGroup }) {
   const { setLinkedSymbol } = useTerminal();
   const [linkGroup, setLinkGroup] = useState<LinkGroup>(defaultGroup);
-  const [news] = useState<NewsItem[]>(INITIAL_NEWS);
+  const [news, setNews] = useState<NewsItem[]>(() => {
+    const cached = newsService.getNews();
+    return cached.length > 0 ? cached : INITIAL_NEWS;
+  });
+  const [isRefreshing, setIsRefreshing] = useState(newsService.getIsRefreshing());
+  const [lastFetchTime, setLastFetchTime] = useState(newsService.getLastFetchTime());
   const [selectedTag, setSelectedTag] = useState<string>('ALL');
   const [selectedSource, setSelectedSource] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [brokenImages, setBrokenImages] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    const unsub = newsService.subscribe((updatedNews, refreshing) => {
+      if (updatedNews && updatedNews.length > 0) {
+        setNews(updatedNews);
+      }
+      setIsRefreshing(refreshing);
+      setLastFetchTime(newsService.getLastFetchTime());
+    });
+    return () => unsub();
+  }, []);
 
   const filtered = news.filter((n) => {
     const matchesTag    = selectedTag === 'ALL' || n.tags.includes(selectedTag);
@@ -769,22 +788,52 @@ export default function NewsPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Li
         linkGroup={linkGroup}
         onLinkGroupChange={setLinkGroup}
         actions={
-          <div className="flex items-center space-x-0.5 flex-wrap">
-            {TAG_FILTERS.map((t) => (
-              <button
-                key={t}
-                type="button"
-                onClick={() => setSelectedTag(t)}
-                className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
-                  selectedTag === t ? 'bg-accent text-white font-bold' : 'text-muted hover:text-text'
-                }`}
-              >
-                {t}
-              </button>
-            ))}
+          <div className="flex items-center space-x-2 text-[10px]">
+            {isRefreshing ? (
+              <span className="text-accent text-[9px] font-bold flex items-center gap-1">
+                <RefreshCw size={10} className="animate-spin" />
+                <span className="hidden sm:inline">LIVE REFRESH...</span>
+              </span>
+            ) : lastFetchTime > 0 ? (
+              <span className="text-muted text-[9px] font-mono hidden sm:inline" title={new Date(lastFetchTime).toLocaleTimeString()}>
+                Updated {formatRelativeTime(lastFetchTime)}
+              </span>
+            ) : null}
+
+            <button
+              type="button"
+              onClick={() => newsService.refreshNews()}
+              disabled={isRefreshing}
+              className="p-1 rounded text-muted hover:text-text hover:bg-surface transition-colors flex items-center gap-1"
+              title="Refresh live financial & crypto feeds now"
+            >
+              <RefreshCw size={11} className={isRefreshing ? 'animate-spin text-accent' : ''} />
+              <span className="hidden md:inline text-[10px]">Refresh</span>
+            </button>
           </div>
         }
       />
+
+      {/* Dedicated Tags Ribbon: Horizontal scrollable so CRYPTO, EQUITIES, etc. NEVER get cut off! */}
+      <div className="h-7 bg-[#0d1014] border-b border-border/40 px-2 flex items-center space-x-1 overflow-x-auto no-scrollbar shrink-0 text-[10px] select-none">
+        <span className="text-muted font-bold text-[9px] uppercase tracking-wider shrink-0 mr-1 flex items-center gap-1">
+          <Tag size={10} className="text-accent" /> TAGS:
+        </span>
+        {TAG_FILTERS.map((t) => (
+          <button
+            key={t}
+            type="button"
+            onClick={() => setSelectedTag(t)}
+            className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all shrink-0 border whitespace-nowrap ${
+              selectedTag === t
+                ? 'bg-accent/20 text-accent border-accent/50 shadow-sm'
+                : 'text-muted hover:text-text bg-white/5 border-border/30 hover:border-border/60'
+            }`}
+          >
+            {t}
+          </button>
+        ))}
+      </div>
 
       {/* Search bar */}
       <div className="h-7 bg-[#111317] border-b border-border/40 px-2 flex items-center space-x-2 shrink-0">
@@ -808,7 +857,7 @@ export default function NewsPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Li
       </div>
 
       {/* Sources Filter Strip */}
-      <div className="h-7 bg-[#0c0e12] border-b border-border/30 px-2 flex items-center space-x-1.5 overflow-x-auto text-[10px] shrink-0">
+      <div className="h-7 bg-[#0c0e12] border-b border-border/30 px-2 flex items-center space-x-1.5 overflow-x-auto no-scrollbar text-[10px] shrink-0">
         <span className="text-muted font-bold text-[9px] uppercase tracking-wider shrink-0 mr-0.5">
           SOURCES:
         </span>
@@ -1002,10 +1051,10 @@ export default function NewsPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Li
 
                 {/* Bottom ribbon */}
                 <div className="flex items-center justify-between text-[9px] pt-1.5 border-t border-border/30">
-                  <div className="flex items-center space-x-1 overflow-hidden min-w-0">
+                  <div className="flex items-center space-x-1 overflow-x-auto no-scrollbar min-w-0">
                     <Tag className="w-2.5 h-2.5 text-muted shrink-0" />
                     {item.tags.map((t) => (
-                      <span key={t} className="bg-white/5 px-1 py-0.5 rounded text-muted shrink-0">
+                      <span key={t} className="bg-white/5 px-1 py-0.5 rounded text-muted shrink-0 whitespace-nowrap">
                         #{t}
                       </span>
                     ))}
@@ -1020,7 +1069,7 @@ export default function NewsPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Li
                           key={sym}
                           type="button"
                           onClick={() => setLinkedSymbol(linkGroup, sym)}
-                          className="bg-accent/20 text-accent font-bold px-1.5 py-0.5 rounded hover:bg-accent hover:text-white transition-colors"
+                          className="bg-accent/20 text-accent font-bold px-1.5 py-0.5 rounded hover:bg-accent hover:text-white transition-colors whitespace-nowrap"
                           title={`Switch ${linkGroup} group to ${sym}`}
                         >
                           {sym.split(':')[0]}

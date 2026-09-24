@@ -207,7 +207,7 @@ export default function WatchlistPanel({ defaultGroup = 'BLUE' }: { defaultGroup
                 >
                   <td className="py-1 px-2">
                     <div className="font-semibold text-text">{inst.displaySymbol}</div>
-                    <div className="text-[10px] text-muted truncate max-w-[90px]">{inst.name}</div>
+                    <div className="text-[10px] text-muted truncate max-w-[160px]" title={inst.name}>{inst.name}</div>
                   </td>
                   <td
                     className={`py-1 px-2 text-right transition-colors ${

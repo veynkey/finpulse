@@ -49,11 +49,15 @@ export default function PanelHeader({
         </div>
       )}
 
-      <span className="font-semibold uppercase tracking-wider text-text font-mono truncate">
+      <span
+        className="font-semibold uppercase tracking-wider text-text font-mono truncate min-w-0"
+        title={title}
+      >
         {title}
       </span>
 
-      <div className="ml-auto flex items-center space-x-2">{actions}</div>
+      <div className="ml-auto flex items-center space-x-2 shrink-0">{actions}</div>
+
     </div>
   );
 }

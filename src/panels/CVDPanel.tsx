@@ -902,15 +902,16 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
           </div>
           <div className="mt-0.5">
             <span
-              className={`text-[9px] font-bold px-1 py-0.5 rounded leading-tight inline-block ${
+              className={`text-[9px] font-bold px-1.5 py-0.5 rounded leading-tight inline-block truncate max-w-full ${
                 spotCvdSummary.divergence.includes('BEARISH')
                   ? 'bg-[#f6465d]/20 text-[#f6465d] border border-[#f6465d]/40'
                   : spotCvdSummary.divergence.includes('BULLISH')
                   ? 'bg-[#00c087]/20 text-[#00c087] border border-[#00c087]/40'
                   : 'bg-white/10 text-muted'
               }`}
+              title={spotCvdSummary.divergence}
             >
-              {spotCvdSummary.divergence.slice(0, 26)}
+              {spotCvdSummary.divergence.split(' (')[0] || spotCvdSummary.divergence}
             </span>
           </div>
         </div>

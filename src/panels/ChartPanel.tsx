@@ -920,19 +920,19 @@ export default function ChartPanel({
             }`}
             title={
               crosshairMode === CrosshairMode.Magnet
-                ? 'Mode Crosshair: SNAP KE CANDLE (Magnet) — Klik untuk mode Leluasa (Free)'
-                : 'Mode Crosshair: LELUASA (Free Floating) — Klik untuk Snap ke Candle'
+                ? 'Mode Crosshair: SNAP KE CANDLE (Magnet) [Klik untuk mode Leluasa]'
+                : 'Mode Crosshair: LELUASA (Free Floating) [Klik untuk Snap ke Candle]'
             }
           >
             {crosshairMode === CrosshairMode.Magnet ? (
               <>
                 <Magnet size={11} className="text-accent" />
-                <span>SNAP CANDLE</span>
+                <span>SNAP</span>
               </>
             ) : (
               <>
                 <Crosshair size={11} className="text-muted" />
-                <span>CROSSHAIR LELUASA</span>
+                <span>LELUASA</span>
               </>
             )}
           </button>
@@ -1032,8 +1032,8 @@ export default function ChartPanel({
             }`}
             title={
               crosshairMode === CrosshairMode.Magnet
-                ? 'Crosshair: Snap ke Candle (Magnet Aktif) — Klik untuk mode Leluasa (Free)'
-                : 'Crosshair: Leluasa (Free Cursor) — Klik untuk Snap ke Candle'
+                ? 'Crosshair: Snap ke Candle (Magnet Aktif) [Klik untuk mode Leluasa]'
+                : 'Crosshair: Leluasa (Free Cursor) [Klik untuk Snap ke Candle]'
             }
           >
             <Magnet size={13} />
