@@ -75,13 +75,43 @@ function createWindow() {
     },
   });
 
-  // Open external links in default OS browser rather than inside the app
+  // Window open handler: allow internal multi-monitor detached desks, open external links in browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.includes('windowType=detached_desk') || url.includes('deskId=')) {
+      return {
+        action: 'allow',
+        overrideBrowserWindowOptions: {
+          width: 1440,
+          height: 900,
+          minWidth: 900,
+          minHeight: 600,
+          title: 'FinPulse Wave MAX - Multi-Monitor Desk',
+          backgroundColor: '#07080a',
+          autoHideMenuBar: true,
+          webPreferences: {
+            nodeIntegration: false,
+            contextIsolation: true,
+            sandbox: true,
+            backgroundThrottling: false,
+          },
+        },
+      };
+    }
     if (url.startsWith('http://') || url.startsWith('https://')) {
       shell.openExternal(url);
       return { action: 'deny' };
     }
     return { action: 'allow' };
+  });
+
+  mainWindow.webContents.on('did-create-window', (childWindow) => {
+    childWindow.webContents.setWindowOpenHandler(({ url }) => {
+      if (url.startsWith('http://') || url.startsWith('https://')) {
+        shell.openExternal(url);
+        return { action: 'deny' };
+      }
+      return { action: 'allow' };
+    });
   });
 
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;

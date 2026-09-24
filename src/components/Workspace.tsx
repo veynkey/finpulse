@@ -30,6 +30,8 @@ import {
   RotateCcw,
   ChevronDown,
   X,
+  ExternalLink,
+  Monitor,
 } from 'lucide-react';
 
 // Panels
@@ -37,6 +39,7 @@ import WatchlistPanel from '../panels/WatchlistPanel';
 import ChartPanel from '../panels/ChartPanel';
 import OrderBookPanel from '../panels/OrderBookPanel';
 import OrderFlowPanel from '../panels/OrderFlowPanel';
+import CVDPanel from '../panels/CVDPanel';
 import RadarPanel from '../panels/RadarPanel';
 import NewsPanel from '../panels/NewsPanel';
 import AIPanel from '../panels/AIPanel';
@@ -51,29 +54,47 @@ import VolumeProfilePanel from '../panels/VolumeProfilePanel';
 const STORAGE_SCHEMA_VERSION = 'layout_schema_version_2';
 const STORAGE_ACTIVE_TAB = 'finpulse_active_workspace_tab';
 const STORAGE_CUSTOM_PRESETS = 'finpulse_dock_custom_presets_v2';
+const STORAGE_DESKS = 'finpulse_workspace_tabs_v3';
 
-interface WorkspaceTab {
+export interface WorkspaceTab {
   id: string;
   name: string;
   presetId: string;
 }
 
-export default function Workspace() {
+const DEFAULT_WORKSPACE_TABS: WorkspaceTab[] = [
+  { id: 'desk_trading', name: 'TRADING', presetId: 'TRADING' },
+  { id: 'desk_cvd', name: 'CVD & ORDER FLOW', presetId: 'ORDER_FLOW' },
+  { id: 'desk_research', name: 'RESEARCH', presetId: 'RESEARCH' },
+  { id: 'desk_macro', name: 'MACRO', presetId: 'MACRO' },
+];
+
+interface WorkspaceProps {
+  forcedDeskId?: string;
+  isDetachedMode?: boolean;
+}
+
+export default function Workspace({ forcedDeskId, isDetachedMode = false }: WorkspaceProps = {}) {
   const layoutRef = useRef<any>(null);
 
   // Modals state
   const [isLibraryOpen, setIsLibraryOpen] = useState(false);
   const [isPresetsOpen, setIsPresetsOpen] = useState(false);
+  const [isNewDeskOpen, setIsNewDeskOpen] = useState(false);
+  const [newDeskName, setNewDeskName] = useState('');
+  const [newDeskPreset, setNewDeskPreset] = useState('TRADING');
 
-  // Multi-workspace tabs state
-  const [workspaceTabs] = useState<WorkspaceTab[]>([
-    { id: 'desk_trading', name: 'TRADING', presetId: 'TRADING' },
-    { id: 'desk_research', name: 'RESEARCH', presetId: 'RESEARCH' },
-    { id: 'desk_macro', name: 'MACRO', presetId: 'MACRO' },
-    { id: 'desk_orderflow', name: 'ORDER FLOW', presetId: 'ORDER_FLOW' },
-  ]);
+  // Dynamic multi-workspace desks state
+  const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>(() => {
+    try {
+      const stored = localStorage.getItem(STORAGE_DESKS);
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return DEFAULT_WORKSPACE_TABS;
+  });
 
   const [activeTabId, setActiveTabId] = useState<string>(() => {
+    if (forcedDeskId) return forcedDeskId;
     return localStorage.getItem(STORAGE_ACTIVE_TAB) || 'desk_trading';
   });
 
@@ -105,7 +126,9 @@ export default function Workspace() {
 
   // Load layout on workspace tab switch
   useEffect(() => {
-    localStorage.setItem(STORAGE_ACTIVE_TAB, activeTabId);
+    if (!isDetachedMode) {
+      localStorage.setItem(STORAGE_ACTIVE_TAB, activeTabId);
+    }
     try {
       const savedLayout = localStorage.getItem(`finpulse_layout_${STORAGE_SCHEMA_VERSION}_${activeTabId}`);
       if (savedLayout) {
@@ -121,7 +144,7 @@ export default function Workspace() {
       BUILTIN_WORKSPACE_PRESETS.find((p) => p.id === currentTab?.presetId) || DEFAULT_PRESET;
     setActivePresetId(targetPreset.id);
     setModel(Model.fromJson(targetPreset.modelJson));
-  }, [activeTabId, workspaceTabs]);
+  }, [activeTabId, workspaceTabs, isDetachedMode]);
 
   // Persist model changes
   const handleModelChange = useCallback((updatedModel: Model) => {
@@ -223,6 +246,57 @@ export default function Workspace() {
     setModel(Model.fromJson(DEFAULT_PRESET.modelJson));
   };
 
+  // Create new custom Desk workspace
+  const handleCreateNewDesk = () => {
+    const cleanName = newDeskName.trim() || `DESK ${workspaceTabs.length + 1}`;
+    const newTab: WorkspaceTab = {
+      id: `desk_${Date.now()}`,
+      name: cleanName.toUpperCase(),
+      presetId: newDeskPreset,
+    };
+    const updated = [...workspaceTabs, newTab];
+    setWorkspaceTabs(updated);
+    try {
+      localStorage.setItem(STORAGE_DESKS, JSON.stringify(updated));
+    } catch {
+      // Safe fallback
+    }
+    setActiveTabId(newTab.id);
+    setIsNewDeskOpen(false);
+    setNewDeskName('');
+  };
+
+  // Delete custom desk workspace
+  const handleDeleteDesk = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (workspaceTabs.length <= 1) return;
+    const updated = workspaceTabs.filter((t) => t.id !== id);
+    setWorkspaceTabs(updated);
+    try {
+      localStorage.setItem(STORAGE_DESKS, JSON.stringify(updated));
+      localStorage.removeItem(`finpulse_layout_${STORAGE_SCHEMA_VERSION}_${id}`);
+    } catch {
+      // Safe fallback
+    }
+    if (activeTabId === id) {
+      setActiveTabId(updated[0].id);
+    }
+  };
+
+  // Detach / Pop-out Desk into a dedicated Monitor 2 secondary window
+  const handlePopoutDesk = (e: React.MouseEvent, tab: WorkspaceTab) => {
+    e.stopPropagation();
+    const url = new URL(window.location.href);
+    url.searchParams.set('windowType', 'detached_desk');
+    url.searchParams.set('deskId', tab.id);
+    url.searchParams.set('deskName', tab.name);
+    window.open(
+      url.toString(),
+      `FinPulse_Desk_${tab.id}`,
+      'width=1440,height=900,left=150,top=150,menubar=no,toolbar=no,location=no,status=no'
+    );
+  };
+
   // Add panel to active tabset
   const handleAddPanel = (panelId: string, title: string) => {
     const jsonTab: IJsonTabNode = {
@@ -287,6 +361,12 @@ export default function Workspace() {
         return (
           <ErrorBoundary fallbackTitle="Time & Sales Tape Error">
             <OrderFlowPanel defaultGroup={contextGroup} />
+          </ErrorBoundary>
+        );
+      case 'cvd':
+        return (
+          <ErrorBoundary fallbackTitle="CVD Spot & Futures Delta Error">
+            <CVDPanel defaultGroup={contextGroup} />
           </ErrorBoundary>
         );
       case 'radar':
@@ -480,27 +560,73 @@ export default function Workspace() {
     <div className="flex flex-col h-full bg-[#07080a] text-xs font-mono select-none overflow-hidden relative">
       {/* Top Professional Workstation Ribbon */}
       <div className="h-7 bg-[#0b0d13] border-b border-border/50 px-2 flex items-center justify-between text-[11px] text-muted shrink-0 z-20">
-        {/* Left: Workspace Desks Bar (Trading, Research, Macro, Order Flow) */}
+        {/* Left: Workspace Desks Bar (Trading, CVD, Research, Macro, + Custom) */}
         <div className="flex items-center space-x-1">
-          <div className="flex items-center bg-[#11141c] rounded p-0.5 border border-border/40">
-            {workspaceTabs.map((tab) => {
-              const isActive = activeTabId === tab.id;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setActiveTabId(tab.id)}
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold tracking-wider transition-colors ${
-                    isActive
-                      ? 'bg-accent text-white shadow-sm'
-                      : 'text-muted hover:text-text hover:bg-surface'
-                  }`}
-                >
-                  {tab.name}
-                </button>
-              );
-            })}
-          </div>
+          {!isDetachedMode && (
+            <div className="flex items-center bg-[#11141c] rounded p-0.5 border border-border/40">
+              {workspaceTabs.map((tab) => {
+                const isActive = activeTabId === tab.id;
+                const isCustom =
+                  !tab.id.startsWith('desk_trading') &&
+                  !tab.id.startsWith('desk_cvd') &&
+                  !tab.id.startsWith('desk_research') &&
+                  !tab.id.startsWith('desk_macro');
+                return (
+                  <div
+                    key={tab.id}
+                    onClick={() => setActiveTabId(tab.id)}
+                    className={`group flex items-center space-x-1.5 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider transition-colors cursor-pointer ${
+                      isActive
+                        ? 'bg-accent text-white shadow-sm'
+                        : 'text-muted hover:text-text hover:bg-surface'
+                    }`}
+                  >
+                    <span>{tab.name}</span>
+
+                    {/* Pop-Out / Detach Icon (Click to open in a separate window for Monitor 2) */}
+                    <button
+                      type="button"
+                      onClick={(e) => handlePopoutDesk(e, tab)}
+                      className="p-0.5 text-white/50 hover:text-white rounded hover:bg-black/30 transition-colors"
+                      title="Pop out Desk into a separate window for Monitor 2"
+                    >
+                      <ExternalLink size={10} />
+                    </button>
+
+                    {/* Delete custom desk */}
+                    {isCustom && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleDeleteDesk(e, tab.id)}
+                        className="p-0.5 text-white/40 hover:text-red-400 rounded hover:bg-black/30 transition-colors"
+                        title="Delete this custom Desk"
+                      >
+                        <X size={10} />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+
+              {/* + Add New Desk Workspace Button */}
+              <button
+                type="button"
+                onClick={() => setIsNewDeskOpen(true)}
+                className="px-1.5 py-0.5 rounded text-[10px] text-muted hover:text-accent hover:bg-accent/10 transition-colors font-bold flex items-center space-x-0.5 ml-0.5"
+                title="Create New Custom Desk Workspace"
+              >
+                <Plus size={11} />
+                <span>Desk</span>
+              </button>
+            </div>
+          )}
+
+          {isDetachedMode && (
+            <div className="flex items-center space-x-1.5 bg-accent/20 px-2 py-0.5 rounded text-accent font-bold border border-accent/40 text-[10px]">
+              <Monitor size={11} />
+              <span>DESK: {(workspaceTabs.find((t) => t.id === activeTabId)?.name || 'SECONDARY').toUpperCase()}</span>
+            </div>
+          )}
 
           <div className="w-[1px] h-3 bg-border/40 mx-1" />
 
@@ -557,6 +683,92 @@ export default function Workspace() {
           realtimeResize={true}
         />
       </div>
+
+      {/* New Desk Workspace Modal */}
+      {isNewDeskOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-xs p-4">
+          <div className="bg-[#0e1118] border border-border rounded-lg shadow-2xl w-full max-w-md p-4 text-xs font-mono">
+            <div className="flex items-center justify-between border-b border-border/60 pb-2 mb-3">
+              <span className="font-bold text-text flex items-center gap-1.5">
+                <Monitor size={13} className="text-accent" /> CREATE NEW DESK WORKSPACE
+              </span>
+              <button
+                type="button"
+                onClick={() => setIsNewDeskOpen(false)}
+                className="text-muted hover:text-text p-1 rounded"
+              >
+                <X size={13} />
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="text-[10px] text-muted block mb-1 uppercase font-semibold">
+                  Desk Title / Label
+                </label>
+                <input
+                  type="text"
+                  value={newDeskName}
+                  onChange={(e) => setNewDeskName(e.target.value)}
+                  placeholder="e.g. MONITOR 2, CVD LAB, ORDERFLOW PRO"
+                  className="w-full bg-[#141722] border border-border px-2.5 py-1.5 rounded text-text placeholder-muted focus:outline-none focus:border-accent text-xs font-bold"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleCreateNewDesk();
+                    if (e.key === 'Escape') setIsNewDeskOpen(false);
+                  }}
+                />
+              </div>
+
+              <div>
+                <label className="text-[10px] text-muted block mb-1 uppercase font-semibold">
+                  Starting Template / Preset
+                </label>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {[
+                    { id: 'TRADING', label: 'Trading Pro Workstation' },
+                    { id: 'ORDER_FLOW', label: 'Order Flow & CVD' },
+                    { id: 'RESEARCH', label: 'Quant Screener' },
+                    { id: 'MACRO', label: 'Macro & News' },
+                    { id: 'DEFAULT', label: 'Clean 4-Quadrant' },
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setNewDeskPreset(p.id)}
+                      className={`text-left p-2 rounded border text-[11px] font-bold transition-colors ${
+                        newDeskPreset === p.id
+                          ? 'bg-accent/20 border-accent text-accent'
+                          : 'bg-[#141722] border-border/60 text-muted hover:text-text'
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end space-x-2 border-t border-border/50">
+                <button
+                  type="button"
+                  onClick={() => setIsNewDeskOpen(false)}
+                  className="px-3 py-1.5 rounded bg-surface hover:bg-surface-hover text-muted hover:text-text border border-border text-[11px]"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleCreateNewDesk}
+                  className="px-3.5 py-1.5 rounded bg-accent hover:bg-accent/90 text-white font-bold text-[11px] shadow-sm flex items-center space-x-1"
+                >
+                  <Plus size={12} />
+                  <span>Create Desk</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modals */}
       <PanelLibraryModal

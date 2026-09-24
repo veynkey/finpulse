@@ -389,6 +389,13 @@ export const ORDER_FLOW_PRESET: WorkspacePresetConfig = {
             },
             {
               type: 'tab',
+              name: 'CVD SPOT & FUTURES',
+              component: 'cvd',
+              id: 'of_cvd',
+              config: { contextGroup: 'BLUE' },
+            },
+            {
+              type: 'tab',
               name: 'VOLUME PROFILE',
               component: 'volumeprofile',
               id: 'of_vpvr',

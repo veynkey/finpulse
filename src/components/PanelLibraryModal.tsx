@@ -73,6 +73,14 @@ export const PANEL_DEFINITIONS: PanelDefinition[] = [
     defaultHeight: 6,
   },
   {
+    id: 'cvd',
+    title: 'CVD Spot & Futures Delta',
+    category: 'TRADING',
+    description: 'Authoritative Cumulative Volume Delta tracking with Spot vs USD-M Perpetual Futures market selection, candle-synchronized timeframes, and divergence detection.',
+    defaultWidth: 5,
+    defaultHeight: 6,
+  },
+  {
     id: 'radar',
     title: 'Market Anomaly Radar',
     category: 'ANALYTICS',

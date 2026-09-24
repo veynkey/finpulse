@@ -3,6 +3,7 @@ import CommandBar from './components/CommandBar';
 import Workspace from './components/Workspace';
 import StatusBar from './components/StatusBar';
 import CommandModal from './components/CommandModal';
+import DetachedDeskShell from './components/DetachedDeskShell';
 
 function TerminalShell() {
   const { density } = useTerminal();
@@ -22,9 +23,18 @@ function TerminalShell() {
 }
 
 export default function App() {
+  const urlParams = new URLSearchParams(window.location.search);
+  const windowType = urlParams.get('windowType');
+  const deskId = urlParams.get('deskId') || 'desk_trading';
+  const deskName = urlParams.get('deskName') || 'Secondary Desk';
+
   return (
     <TerminalProvider>
-      <TerminalShell />
+      {windowType === 'detached_desk' ? (
+        <DetachedDeskShell deskId={deskId} deskName={deskName} />
+      ) : (
+        <TerminalShell />
+      )}
     </TerminalProvider>
   );
 }
