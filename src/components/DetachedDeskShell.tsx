@@ -1,7 +1,8 @@
 import { useEffect } from 'react';
 import { useTerminal } from '../context/TerminalContext';
+import { useAppUpdater } from '../hooks/useAppUpdater';
 import Workspace from './Workspace';
-import { Terminal, Monitor, Minimize2 } from 'lucide-react';
+import { Terminal, Monitor, Minimize2, RefreshCw } from 'lucide-react';
 
 interface DetachedDeskShellProps {
   deskId: string;
@@ -10,6 +11,7 @@ interface DetachedDeskShellProps {
 
 export default function DetachedDeskShell({ deskId, deskName }: DetachedDeskShellProps) {
   const { density } = useTerminal();
+  const { updateDownloaded, newVersion, restartToUpdate } = useAppUpdater();
 
   // Listen to cross-window sync messages
   useEffect(() => {
@@ -52,8 +54,19 @@ export default function DetachedDeskShell({ deskId, deskName }: DetachedDeskShel
           </span>
         </div>
 
-        {/* Right: Dock Back & Close Window */}
+        {/* Right: Restart to Update, Dock Back & Close Window */}
         <div className="flex items-center space-x-2 text-[10px]">
+          {updateDownloaded && (
+            <button
+              type="button"
+              onClick={restartToUpdate}
+              className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded bg-[#00c087] hover:bg-[#00e5a3] text-black font-extrabold text-[10px] tracking-wider uppercase animate-pulse shadow-md transition-all cursor-pointer"
+              title="Update baru sudah siap. Klik untuk restart dan menerapkan update."
+            >
+              <RefreshCw size={11} className="animate-spin" />
+              <span>Restart to Update {newVersion ? `(v${newVersion})` : ''}</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => window.close()}

@@ -18,6 +18,7 @@ import {
   ChevronDown,
 } from 'lucide-react';
 import { useTerminal } from '../context/TerminalContext';
+import { chartSyncService } from '../services/chartSyncService';
 import type { LinkGroup } from '../types';
 import PanelHeader from './PanelHeader';
 
@@ -86,6 +87,12 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
   // Chart DOM refs
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
+
+  // Cross-chart & multi-monitor synchronization state
+  const panelInstanceId = useRef('cvd_' + Math.random().toString(36).slice(2, 8)).current;
+  const isSyncingRangeRef = useRef(false);
+  const [mirroredCrosshairX, setMirroredCrosshairX] = useState<number | null>(null);
+  const [mirroredTime, setMirroredTime] = useState<number | null>(null);
 
   // Series refs
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -337,6 +344,60 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
 
     chartRef.current = chart;
 
+    // Synchronize visible logical range (Pan / Zoom / Scroll) across panels and monitors
+    const onRangeChange = (range: any) => {
+      if (!range || isSyncingRangeRef.current) return;
+      chartSyncService.broadcastLogicalRange(panelInstanceId, range);
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onRangeChange);
+
+    // Listen for incoming range changes from normal chart or other panels
+    const unsubRangeSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+      if (!chartRef.current) return;
+      isSyncingRangeRef.current = true;
+      chartRef.current.timeScale().setVisibleLogicalRange(range);
+      setTimeout(() => {
+        isSyncingRangeRef.current = false;
+      }, 20);
+    });
+
+    // Synchronize Crosshair move
+    chart.subscribeCrosshairMove((param) => {
+      if (!param.point || !param.time) {
+        chartSyncService.clearCrosshair(panelInstanceId);
+        return;
+      }
+      chartSyncService.broadcastCrosshair(panelInstanceId, {
+        time: param.time as number,
+      });
+    });
+
+    // Listen for incoming mirrored crosshair moves
+    const unsubCrosshairSync = chartSyncService.subscribeCrosshair(panelInstanceId, (point) => {
+      if (!chartRef.current || !chartContainerRef.current) return;
+      if (chartContainerRef.current.clientWidth === 0 || chartContainerRef.current.clientHeight === 0) {
+        return;
+      }
+      if (point.time === null) {
+        setMirroredCrosshairX(null);
+        setMirroredTime(null);
+        return;
+      }
+      try {
+        const x = chartRef.current.timeScale().timeToCoordinate(point.time as any);
+        if (x !== null && x >= 0 && x <= chartContainerRef.current.clientWidth) {
+          setMirroredCrosshairX(x);
+          setMirroredTime(point.time);
+        } else {
+          setMirroredCrosshairX(null);
+          setMirroredTime(null);
+        }
+      } catch {
+        setMirroredCrosshairX(null);
+        setMirroredTime(null);
+      }
+    });
+
     // Delta histogram series at bottom
     const histogram = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
@@ -429,6 +490,10 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
     return () => {
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
+      unsubRangeSync();
+      unsubCrosshairSync();
+      chartSyncService.clearCrosshair(panelInstanceId);
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;
@@ -853,7 +918,26 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
 
       {/* Main Lightweight Chart Canvas */}
       <div className="flex-grow w-full h-full relative overflow-hidden">
-        <div ref={chartContainerRef} className="absolute inset-0 w-full h-full" />
+        <div
+          ref={chartContainerRef}
+          className="absolute inset-0 w-full h-full"
+          onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId)}
+        />
+
+        {/* Mirrored Crosshair from Main Chart / Secondary Monitor */}
+        {mirroredCrosshairX !== null && (
+          <div
+            className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col justify-between"
+            style={{ left: `${mirroredCrosshairX}px` }}
+          >
+            <div className="w-[1px] h-full border-l border-dashed border-[#00d2ff]" />
+            {mirroredTime && (
+              <div className="absolute bottom-6 -translate-x-1/2 bg-[#00d2ff] text-black text-[9px] font-bold px-1 rounded shadow pointer-events-none whitespace-nowrap">
+                {new Date(mirroredTime * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Chart Legend Overlay */}
         <div className="absolute top-2 left-3 pointer-events-none flex items-center space-x-3 text-[10px] bg-black/60 px-2 py-1 rounded backdrop-blur-sm border border-white/5">

@@ -1,8 +1,10 @@
 import { useTerminal } from '../context/TerminalContext';
-import { Search, Terminal, Bell, LayoutGrid, Monitor } from 'lucide-react';
+import { useAppUpdater } from '../hooks/useAppUpdater';
+import { Search, Terminal, Bell, LayoutGrid, Monitor, RefreshCw } from 'lucide-react';
 
 export default function CommandBar() {
   const { setIsCommandOpen, density, setDensity, activeWorkspaceId, setActiveWorkspaceId, recentAlerts } = useTerminal();
+  const { updateDownloaded, downloadingUpdate, newVersion, restartToUpdate } = useAppUpdater();
 
   return (
     <div className="h-8 border-b border-border flex items-center px-3 bg-[#111317] shrink-0 select-none font-mono text-xs z-20">
@@ -73,6 +75,32 @@ export default function CommandBar() {
             {recentAlerts.length}
           </span>
         </div>
+
+        {/* Restart to Update Banner Button */}
+        {updateDownloaded && (
+          <>
+            <span className="text-border">|</span>
+            <button
+              type="button"
+              onClick={restartToUpdate}
+              className="flex items-center space-x-1.5 px-2.5 py-0.5 rounded bg-[#00c087] hover:bg-[#00e5a3] text-black font-extrabold text-[10px] tracking-wider uppercase animate-pulse shadow-md transition-all cursor-pointer"
+              title="Update baru sudah siap. Klik untuk restart dan menerapkan update."
+            >
+              <RefreshCw size={11} className="animate-spin" />
+              <span>Restart to Update {newVersion ? `(v${newVersion})` : ''}</span>
+            </button>
+          </>
+        )}
+
+        {downloadingUpdate && !updateDownloaded && (
+          <>
+            <span className="text-border">|</span>
+            <div className="flex items-center space-x-1 px-2 py-0.5 rounded bg-surface border border-accent/40 text-accent text-[10px] font-bold">
+              <RefreshCw size={10} className="animate-spin" />
+              <span>Downloading Update...</span>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

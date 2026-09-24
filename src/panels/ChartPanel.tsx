@@ -28,6 +28,7 @@ import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
 import { marketMirror } from '../services/marketMirror';
 import { marketConditionsService } from '../services/marketConditions';
+import { chartSyncService } from '../services/chartSyncService';
 import { canonicalizeInstrumentId } from '../services/instruments';
 import {
   calculateSMA,
@@ -66,6 +67,12 @@ export default function ChartPanel({
   const [scaleMode, setScaleMode] = useState<ScaleMode>('AUTO');
   const [activeTool, setActiveTool] = useState<DrawingTool>('cursor');
   const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  // Cross-chart & multi-monitor synchronization state
+  const panelInstanceId = useRef('chart_' + Math.random().toString(36).slice(2, 8)).current;
+  const isSyncingRangeRef = useRef(false);
+  const [mirroredCrosshairX, setMirroredCrosshairX] = useState<number | null>(null);
+  const [mirroredTime, setMirroredTime] = useState<number | null>(null);
 
   // Indicators toggle state
   const [enabledIndicators, setEnabledIndicators] = useState<{
@@ -236,6 +243,60 @@ export default function ChartPanel({
 
       chartRef.current = chart;
       indicatorSeriesRef.current.clear();
+
+      // Synchronize visible logical range (Pan / Zoom / Scroll) across panels and monitors
+      const onSyncRangeChange = (range: any) => {
+        if (!range || isSyncingRangeRef.current) return;
+        chartSyncService.broadcastLogicalRange(panelInstanceId, range);
+      };
+      chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncRangeChange);
+
+      // Listen for incoming range changes from CVD or other charts
+      const unsubRangeSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+        if (!chartRef.current) return;
+        isSyncingRangeRef.current = true;
+        chartRef.current.timeScale().setVisibleLogicalRange(range);
+        setTimeout(() => {
+          isSyncingRangeRef.current = false;
+        }, 20);
+      });
+
+      // Synchronize Crosshair move
+      chart.subscribeCrosshairMove((param) => {
+        if (!param.point || !param.time) {
+          chartSyncService.clearCrosshair(panelInstanceId);
+          return;
+        }
+        chartSyncService.broadcastCrosshair(panelInstanceId, {
+          time: param.time as number,
+        });
+      });
+
+      // Listen for incoming mirrored crosshair moves
+      const unsubCrosshairSync = chartSyncService.subscribeCrosshair(panelInstanceId, (point) => {
+        if (!chartRef.current || !chartContainerRef.current) return;
+        if (chartContainerRef.current.clientWidth === 0 || chartContainerRef.current.clientHeight === 0) {
+          return;
+        }
+        if (point.time === null) {
+          setMirroredCrosshairX(null);
+          setMirroredTime(null);
+          return;
+        }
+        try {
+          const x = chartRef.current.timeScale().timeToCoordinate(point.time as any);
+          if (x !== null && x >= 0 && x <= chartContainerRef.current.clientWidth) {
+            setMirroredCrosshairX(x);
+            setMirroredTime(point.time);
+          } else {
+            setMirroredCrosshairX(null);
+            setMirroredTime(null);
+          }
+        } catch {
+          setMirroredCrosshairX(null);
+          setMirroredTime(null);
+        }
+      });
 
       // Retrieve initial cached candles immediately (Stale-While-Revalidate)
       const rawCandles = marketData.getHistoricalCandles(activeInstrument.id, timeframe);
@@ -530,6 +591,10 @@ export default function ChartPanel({
 
       return () => {
         chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(onSyncRangeChange);
+        unsubRangeSync();
+        unsubCrosshairSync();
+        chartSyncService.clearCrosshair(panelInstanceId);
         unsubTrades();
         unsubCandles();
         unsubMirror();
@@ -1051,7 +1116,26 @@ export default function ChartPanel({
         {/* Chart Viewport */}
         <div className="flex-grow relative h-full w-full overflow-hidden">
           {/* Lightweight Charts Canvas Host */}
-          <div className="w-full h-full" ref={chartContainerRef} />
+          <div
+            className="w-full h-full"
+            ref={chartContainerRef}
+            onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId)}
+          />
+
+          {/* Mirrored Crosshair from CVD / Secondary Monitor */}
+          {mirroredCrosshairX !== null && (
+            <div
+              className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col justify-between"
+              style={{ left: `${mirroredCrosshairX}px` }}
+            >
+              <div className="w-[1px] h-full border-l border-dashed border-[#00d2ff]" />
+              {mirroredTime && (
+                <div className="absolute bottom-6 -translate-x-1/2 bg-[#00d2ff] text-black text-[9px] font-bold px-1 rounded shadow pointer-events-none">
+                  {new Date(mirroredTime * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Loading Authoritative Data Indicator */}
           {isLoadingHistory && (

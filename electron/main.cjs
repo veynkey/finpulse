@@ -24,6 +24,11 @@ function setupAutoUpdater() {
 
   autoUpdater.on('update-available', (info) => {
     console.log(`[FinPulse AutoUpdater] Update found: v${info.version}`);
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('update-available', { version: info.version });
+      }
+    });
   });
 
   autoUpdater.on('update-not-available', () => {
@@ -35,22 +40,25 @@ function setupAutoUpdater() {
   });
 
   autoUpdater.on('update-downloaded', (info) => {
-    if (mainWindow) {
-      dialog
-        .showMessageBox(mainWindow, {
-          type: 'info',
-          title: 'Update FinPulse Tersedia',
-          message: `Pembaruan FinPulse Wave MAX v${info.version} telah selesai diunduh secara instan!`,
-          detail: 'Restart aplikasi sekarang untuk langsung menerapkan versi terbaru?',
-          buttons: ['Restart Sekarang', 'Nanti Saja'],
-          defaultId: 0,
-          cancelId: 1,
-        })
-        .then((result) => {
-          if (result.response === 0) {
-            autoUpdater.quitAndInstall();
-          }
-        });
+    // Notify all open windows (main and detached monitors)
+    BrowserWindow.getAllWindows().forEach((win) => {
+      if (!win.isDestroyed()) {
+        win.webContents.send('update-downloaded', { version: info.version });
+      }
+    });
+  });
+
+  // Handle IPC command from top-right "Restart to Update" button
+  ipcMain.on('restart-and-install-update', () => {
+    autoUpdater.quitAndInstall();
+  });
+
+  // Handle IPC command to manually check for updates
+  ipcMain.on('check-for-updates', () => {
+    if (app.isPackaged) {
+      autoUpdater.checkForUpdatesAndNotify().catch((err) => {
+        console.warn('[FinPulse AutoUpdater] Check error:', err);
+      });
     }
   });
 
@@ -75,9 +83,10 @@ function createWindow() {
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
       contextIsolation: true,
-      sandbox: true,
+      sandbox: false,
       backgroundThrottling: false, // Prevent chart freezing when window is unfocused
     },
   });
@@ -96,9 +105,10 @@ function createWindow() {
           backgroundColor: '#07080a',
           autoHideMenuBar: true,
           webPreferences: {
+            preload: path.join(__dirname, 'preload.cjs'),
             nodeIntegration: false,
             contextIsolation: true,
-            sandbox: true,
+            sandbox: false,
             backgroundThrottling: false,
           },
         },
