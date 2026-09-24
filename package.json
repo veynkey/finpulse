@@ -1,7 +1,7 @@
 {
   "name": "finpulse",
   "private": true,
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -34,7 +34,7 @@
         "nsis",
         "portable"
       ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "FinPulse-Wave-MAX-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,

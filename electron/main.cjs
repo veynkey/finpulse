@@ -11,6 +11,13 @@ autoUpdater.autoInstallOnAppQuit = true;
 function setupAutoUpdater() {
   if (!app.isPackaged) return; // Only run in production installed desktop app
 
+  // Explicitly set GitHub Releases repository target
+  autoUpdater.setFeedURL({
+    provider: 'github',
+    owner: 'veynkey',
+    repo: 'finpulse',
+  });
+
   autoUpdater.on('checking-for-update', () => {
     console.log('[FinPulse AutoUpdater] Checking for updates on GitHub Releases...');
   });
