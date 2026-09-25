@@ -1,10 +1,12 @@
 import { useTerminal } from '../context/TerminalContext';
 import { useAppUpdater } from '../hooks/useAppUpdater';
-import { Search, Terminal, Bell, LayoutGrid, Monitor, RefreshCw } from 'lucide-react';
+import { useFullscreen } from '../hooks/useFullscreen';
+import { Search, Terminal, Bell, LayoutGrid, Monitor, RefreshCw, Maximize, Minimize } from 'lucide-react';
 
 export default function CommandBar() {
   const { setIsCommandOpen, density, setDensity, activeWorkspaceId, setActiveWorkspaceId, recentAlerts } = useTerminal();
   const { updateDownloaded, downloadingUpdate, newVersion, restartToUpdate } = useAppUpdater();
+  const { isFullscreen, toggleFullscreen } = useFullscreen();
 
   return (
     <div className="h-8 border-b border-border flex items-center px-3 bg-[#111317] shrink-0 select-none font-mono text-xs z-20">
@@ -101,6 +103,19 @@ export default function CommandBar() {
             </div>
           </>
         )}
+
+        <span className="text-border">|</span>
+
+        {/* Fullscreen Toggle Button */}
+        <button
+          type="button"
+          onClick={toggleFullscreen}
+          className="flex items-center space-x-1 px-1.5 py-0.5 rounded text-muted hover:text-text hover:bg-surface transition-colors cursor-pointer text-[10px]"
+          title={isFullscreen ? 'Exit Fullscreen (F11)' : 'Enter Fullscreen (F11)'}
+        >
+          {isFullscreen ? <Minimize size={12} className="text-accent" /> : <Maximize size={12} />}
+          <span>{isFullscreen ? 'RESTORE' : 'FULLSCREEN'}</span>
+        </button>
       </div>
     </div>
   );

@@ -1,3 +1,8 @@
+export interface TimeRange {
+  from: number; // Unix timestamp in seconds
+  to: number;   // Unix timestamp in seconds
+}
+
 export interface ChartRange {
   from: number;
   to: number;
@@ -9,15 +14,19 @@ export interface CrosshairPoint {
   ratioX?: number; // relative horizontal position 0.0 - 1.0
 }
 
+type TimeRangeListener = (range: TimeRange) => void;
 type RangeListener = (range: ChartRange) => void;
 type CrosshairListener = (point: CrosshairPoint) => void;
 
 class ChartSyncService {
   private channel: BroadcastChannel | null = null;
+  private timeRangeListeners: Map<string, TimeRangeListener> = new Map();
   private rangeListeners: Map<string, RangeListener> = new Map();
   private crosshairListeners: Map<string, CrosshairListener> = new Map();
-  private lastBroadcastSource = '';
-  private lastBroadcastTime = 0;
+  private lastTimeBroadcastSource = '';
+  private lastTimeBroadcastTimestamp = 0;
+  private lastLogicalBroadcastSource = '';
+  private lastLogicalBroadcastTimestamp = 0;
 
   constructor() {
     try {
@@ -26,7 +35,9 @@ class ChartSyncService {
         const data = event.data;
         if (!data || !data.type) return;
 
-        if (data.type === 'SYNC_LOGICAL_RANGE' && data.range) {
+        if (data.type === 'SYNC_TIME_RANGE' && data.range) {
+          this.notifyLocalTimeRangeListeners(data.sourceId, data.range);
+        } else if (data.type === 'SYNC_LOGICAL_RANGE' && data.range) {
           this.notifyLocalRangeListeners(data.sourceId, data.range);
         } else if (data.type === 'SYNC_CROSSHAIR') {
           this.notifyLocalCrosshairListeners(data.sourceId, data.point);
@@ -37,21 +48,59 @@ class ChartSyncService {
     }
   }
 
-  // --- LOGICAL RANGE (SCROLL / ZOOM / PAN) SYNC ---
+  // TIME RANGE (TIMESTAMP BASED: SCROLL / ZOOM / PAN) SYNC
+  public broadcastTimeRange(sourceId: string, range: TimeRange) {
+    if (!range || typeof range.from !== 'number' || typeof range.to !== 'number') return;
+    if (isNaN(range.from) || isNaN(range.to) || range.from >= range.to) return;
 
-  public broadcastLogicalRange(sourceId: string, range: ChartRange) {
-    // Prevent flood
     const now = performance.now();
-    if (this.lastBroadcastSource === sourceId && now - this.lastBroadcastTime < 16) {
+    if (this.lastTimeBroadcastSource === sourceId && now - this.lastTimeBroadcastTimestamp < 16) {
       return;
     }
-    this.lastBroadcastSource = sourceId;
-    this.lastBroadcastTime = now;
+    this.lastTimeBroadcastSource = sourceId;
+    this.lastTimeBroadcastTimestamp = now;
 
     // 1. Notify local in-window subscribers
-    this.notifyLocalRangeListeners(sourceId, range);
+    this.notifyLocalTimeRangeListeners(sourceId, range);
 
     // 2. Broadcast across monitors / windows
+    if (this.channel) {
+      try {
+        this.channel.postMessage({
+          type: 'SYNC_TIME_RANGE',
+          sourceId,
+          range,
+        });
+      } catch {}
+    }
+  }
+
+  public subscribeTimeRange(id: string, callback: TimeRangeListener): () => void {
+    this.timeRangeListeners.set(id, callback);
+    return () => {
+      this.timeRangeListeners.delete(id);
+    };
+  }
+
+  private notifyLocalTimeRangeListeners(sourceId: string, range: TimeRange) {
+    this.timeRangeListeners.forEach((callback, id) => {
+      if (id !== sourceId) {
+        callback(range);
+      }
+    });
+  }
+
+  // LOGICAL RANGE (FALLBACK INDEX-BASED) SYNC
+  public broadcastLogicalRange(sourceId: string, range: ChartRange) {
+    const now = performance.now();
+    if (this.lastLogicalBroadcastSource === sourceId && now - this.lastLogicalBroadcastTimestamp < 16) {
+      return;
+    }
+    this.lastLogicalBroadcastSource = sourceId;
+    this.lastLogicalBroadcastTimestamp = now;
+
+    this.notifyLocalRangeListeners(sourceId, range);
+
     if (this.channel) {
       try {
         this.channel.postMessage({
@@ -78,13 +127,10 @@ class ChartSyncService {
     });
   }
 
-  // --- CROSSHAIR MIRRORING SYNC ---
-
+  // CROSSHAIR MIRRORING SYNC
   public broadcastCrosshair(sourceId: string, point: CrosshairPoint) {
-    // 1. Notify local in-window subscribers
     this.notifyLocalCrosshairListeners(sourceId, point);
 
-    // 2. Broadcast across monitors / windows
     if (this.channel) {
       try {
         this.channel.postMessage({

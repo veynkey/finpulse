@@ -62,6 +62,19 @@ function setupAutoUpdater() {
     }
   });
 
+  // Handle Fullscreen IPC
+  ipcMain.on('toggle-fullscreen', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win) {
+      win.setFullScreen(!win.isFullScreen());
+    }
+  });
+
+  ipcMain.handle('is-fullscreen', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return win ? win.isFullScreen() : false;
+  });
+
   // Check for updates 3 seconds after boot, then check every 2 hours
   setTimeout(() => {
     autoUpdater.checkForUpdatesAndNotify().catch(() => {});
@@ -139,10 +152,13 @@ function createWindow() {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
-  // F12 or Ctrl+Shift+I to toggle DevTools
+  // F12 or Ctrl+Shift+I to toggle DevTools, F11 for Fullscreen
   mainWindow.webContents.on('before-input-event', (event, input) => {
     if (input.key === 'F12' || (input.control && input.shift && input.key.toLowerCase() === 'i')) {
       mainWindow.webContents.toggleDevTools();
+      event.preventDefault();
+    } else if (input.key === 'F11' && input.type === 'keyDown') {
+      mainWindow.setFullScreen(!mainWindow.isFullScreen());
       event.preventDefault();
     }
   });
@@ -153,6 +169,14 @@ function createWindow() {
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+  });
+
+  mainWindow.on('enter-full-screen', () => {
+    mainWindow?.webContents.send('fullscreen-change', true);
+  });
+
+  mainWindow.on('leave-full-screen', () => {
+    mainWindow?.webContents.send('fullscreen-change', false);
   });
 
   mainWindow.on('closed', () => {

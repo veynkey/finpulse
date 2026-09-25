@@ -16,6 +16,8 @@ import {
   CandlestickChart,
   LineChart as LineChartIcon,
   ChevronDown,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { useTerminal } from '../context/TerminalContext';
 import { chartSyncService } from '../services/chartSyncService';
@@ -54,7 +56,15 @@ const COIN_CATEGORIES: Record<string, string[]> = {
 
 const ALL_COINS = Object.values(COIN_CATEGORIES).flat();
 
-export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: LinkGroup }) {
+export default function CVDPanel({
+  defaultGroup = 'BLUE',
+  onMaximize,
+  isMaximized = false,
+}: {
+  defaultGroup?: LinkGroup;
+  onMaximize?: () => void;
+  isMaximized?: boolean;
+}) {
   const { getSymbolForGroup } = useTerminal();
   const [linkGroup, setLinkGroup] = useState<LinkGroup>(defaultGroup);
   const activeInstrument = getSymbolForGroup(linkGroup);
@@ -79,6 +89,21 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
   const [chartStyle, setChartStyle] = useState<CvdChartStyle>('CANDLES');
   const [timeframe, setTimeframe] = useState<CvdTimeframe>('15m');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Initial fit tracker ref
+  const hasInitialFitRef = useRef(false);
+  useEffect(() => {
+    hasInitialFitRef.current = false;
+  }, [activeSymbol, timeframe]);
+
+  // Listen for timeframe changes triggered from the Fullscreen Hotbar
+  useEffect(() => {
+    const handleHotbarTf = (e: any) => {
+      if (e?.detail) setTimeframe(e.detail as CvdTimeframe);
+    };
+    window.addEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
+    return () => window.removeEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
+  }, []);
 
   // Real-time metric summaries
   const [spotCvdSummary, setSpotCvdSummary] = useState({ cvd: 0, netDelta: 0, buyRatio: 50, divergence: 'NEUTRAL' });
@@ -184,8 +209,8 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
     const tf = timeframe;
 
     try {
-      const spotUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=120`;
-      const futUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=120`;
+      const spotUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=1000`;
+      const futUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=1000`;
 
       const [spotRes, futRes] = await Promise.allSettled([
         fetch(spotUrl).then((r) => (r.ok ? r.json() : [])),
@@ -238,6 +263,8 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
 
       // Update Chart Series
       if (chartRef.current) {
+        const prevRange = chartRef.current.timeScale().getVisibleRange();
+
         if (chartStyle === 'CANDLES') {
           // Render as true CVD Candlesticks!
           const primaryData = marketMode === 'FUTURES' ? futData : spotData;
@@ -295,7 +322,15 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
           deltaHistogramRef.current.setData(histogramPoints);
         }
 
-        chartRef.current.timeScale().fitContent();
+        // Only fitContent on the very first load, preserve user visible range across updates and drags
+        if (!hasInitialFitRef.current) {
+          chartRef.current.timeScale().fitContent();
+          hasInitialFitRef.current = true;
+        } else if (prevRange) {
+          try {
+            chartRef.current.timeScale().setVisibleRange(prevRange);
+          } catch {}
+        }
       }
     } catch (err) {
       console.error('Failed to load CVD data:', err);
@@ -344,21 +379,30 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
 
     chartRef.current = chart;
 
-    // Synchronize visible logical range (Pan / Zoom / Scroll) across panels and monitors
-    const onRangeChange = (range: any) => {
-      if (!range || isSyncingRangeRef.current) return;
-      chartSyncService.broadcastLogicalRange(panelInstanceId, range);
+    // Synchronize visible Time Range (Pan / Zoom / Scroll) across panels and monitors
+    const onRangeChange = (timeRange: any) => {
+      if (!timeRange || isSyncingRangeRef.current) return;
+      if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
+        chartSyncService.broadcastTimeRange(panelInstanceId, {
+          from: timeRange.from,
+          to: timeRange.to,
+        });
+      }
     };
-    chart.timeScale().subscribeVisibleLogicalRangeChange(onRangeChange);
+    chart.timeScale().subscribeVisibleTimeRangeChange(onRangeChange);
 
-    // Listen for incoming range changes from normal chart or other panels
-    const unsubRangeSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+    // Listen for incoming time range changes from normal chart or other panels
+    const unsubRangeSync = chartSyncService.subscribeTimeRange(panelInstanceId, (timeRange) => {
       if (!chartRef.current) return;
       isSyncingRangeRef.current = true;
-      chartRef.current.timeScale().setVisibleLogicalRange(range);
+      try {
+        chartRef.current.timeScale().setVisibleRange(timeRange as any);
+      } catch {
+        // Safe ignore
+      }
       setTimeout(() => {
         isSyncingRangeRef.current = false;
-      }, 20);
+      }, 50);
     });
 
     // Synchronize Crosshair move
@@ -490,7 +534,7 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
     return () => {
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
-      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(onRangeChange);
       unsubRangeSync();
       unsubCrosshairSync();
       chartSyncService.clearCrosshair(panelInstanceId);
@@ -656,6 +700,18 @@ export default function CVDPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Lin
             >
               <RefreshCw size={11} className={isLoading ? 'animate-spin text-accent' : ''} />
             </button>
+
+            {/* Maximize Toggle */}
+            {onMaximize && (
+              <button
+                type="button"
+                onClick={onMaximize}
+                className="p-1 text-muted hover:text-text hover:bg-surface rounded transition-colors cursor-pointer"
+                title={isMaximized ? 'Restore Layout' : 'Maximize CVD Panel'}
+              >
+                {isMaximized ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              </button>
+            )}
           </div>
         }
       />

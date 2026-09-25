@@ -98,6 +98,15 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
     return localStorage.getItem(STORAGE_ACTIVE_TAB) || 'desk_trading';
   });
 
+  // Listen to hotbar desk switches
+  useEffect(() => {
+    const handleSwitch = (e: any) => {
+      if (e?.detail) setActiveTabId(e.detail);
+    };
+    window.addEventListener('finpulse-switch-desk', handleSwitch);
+    return () => window.removeEventListener('finpulse-switch-desk', handleSwitch);
+  }, []);
+
   // Custom presets state
   const [customPresets, setCustomPresets] = useState<WorkspacePresetConfig[]>(() => {
     try {
@@ -348,6 +357,7 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
             <ChartPanel
               defaultGroup={contextGroup}
               onMaximize={() => model.doAction(Actions.maximizeToggle(node.getParent()?.getId() || ''))}
+              isMaximized={Boolean((node.getParent() as any)?.isMaximized?.())}
             />
           </ErrorBoundary>
         );
@@ -366,7 +376,11 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
       case 'cvd':
         return (
           <ErrorBoundary fallbackTitle="CVD Spot & Futures Delta Error">
-            <CVDPanel defaultGroup={contextGroup} />
+            <CVDPanel
+              defaultGroup={contextGroup}
+              onMaximize={() => model.doAction(Actions.maximizeToggle(node.getParent()?.getId() || ''))}
+              isMaximized={Boolean((node.getParent() as any)?.isMaximized?.())}
+            />
           </ErrorBoundary>
         );
       case 'radar':

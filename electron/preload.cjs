@@ -13,4 +13,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
   checkForUpdates: () => {
     ipcRenderer.send('check-for-updates');
   },
+  toggleFullscreen: () => {
+    ipcRenderer.send('toggle-fullscreen');
+  },
+  isFullscreen: () => {
+    return ipcRenderer.invoke('is-fullscreen');
+  },
+  onFullscreenChange: (callback) => {
+    const handler = (_event, isFull) => callback(isFull);
+    ipcRenderer.on('fullscreen-change', handler);
+    return () => ipcRenderer.removeListener('fullscreen-change', handler);
+  },
 });

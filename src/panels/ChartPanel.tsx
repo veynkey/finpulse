@@ -244,21 +244,30 @@ export default function ChartPanel({
       chartRef.current = chart;
       indicatorSeriesRef.current.clear();
 
-      // Synchronize visible logical range (Pan / Zoom / Scroll) across panels and monitors
-      const onSyncRangeChange = (range: any) => {
-        if (!range || isSyncingRangeRef.current) return;
-        chartSyncService.broadcastLogicalRange(panelInstanceId, range);
+      // Synchronize visible Time Range (Pan / Zoom / Scroll) across panels and monitors
+      const onSyncTimeRangeChange = (timeRange: any) => {
+        if (!timeRange || isSyncingRangeRef.current) return;
+        if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
+          chartSyncService.broadcastTimeRange(panelInstanceId, {
+            from: timeRange.from,
+            to: timeRange.to,
+          });
+        }
       };
-      chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncRangeChange);
+      chart.timeScale().subscribeVisibleTimeRangeChange(onSyncTimeRangeChange);
 
-      // Listen for incoming range changes from CVD or other charts
-      const unsubRangeSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+      // Listen for incoming time range changes from CVD or other charts
+      const unsubTimeRangeSync = chartSyncService.subscribeTimeRange(panelInstanceId, (timeRange) => {
         if (!chartRef.current) return;
         isSyncingRangeRef.current = true;
-        chartRef.current.timeScale().setVisibleLogicalRange(range);
+        try {
+          chartRef.current.timeScale().setVisibleRange(timeRange as any);
+        } catch {
+          // Ignore if out of bounds
+        }
         setTimeout(() => {
           isSyncingRangeRef.current = false;
-        }, 20);
+        }, 50);
       });
 
       // Synchronize Crosshair move
@@ -470,6 +479,7 @@ export default function ChartPanel({
         if (canonicalizeInstrumentId(instId) === canonicalActiveId && tf === timeframe && primarySeries) {
           setIsLoadingHistory(false);
           const displayCandles = chartType === 'heikin_ashi' ? calculateHeikinAshi(freshCandles) : freshCandles;
+          const currentVisibleRange = chartRef.current?.timeScale().getVisibleRange();
           if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
             primarySeries.setData(displayCandles.map((c) => ({ time: c.time, value: c.close })) as any);
           } else {
@@ -482,6 +492,12 @@ export default function ChartPanel({
               color: c.close >= c.open ? 'rgba(0, 200, 83, 0.35)' : 'rgba(255, 61, 0, 0.35)',
             })) as any
           );
+
+          if (currentVisibleRange && chartRef.current) {
+            try {
+              chartRef.current.timeScale().setVisibleRange(currentVisibleRange);
+            } catch {}
+          }
 
           // Update active indicators with full fresh dataset
           if (enabledIndicators.sma20) indicatorSeriesRef.current.get('sma20')?.setData(calculateSMA(freshCandles, 20) as any);
@@ -513,7 +529,7 @@ export default function ChartPanel({
       // Infinite backward historical scroll backfill
       let isFetchingEarlier = false;
       const onRangeChange = async (logicalRange: any) => {
-        if (!logicalRange || isFetchingEarlier) return;
+        if (!logicalRange || isFetchingEarlier || isSyncingRangeRef.current) return;
         if (logicalRange.from < 25) {
           isFetchingEarlier = true;
           try {
@@ -591,8 +607,8 @@ export default function ChartPanel({
 
       return () => {
         chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
-        chart.timeScale().unsubscribeVisibleLogicalRangeChange(onSyncRangeChange);
-        unsubRangeSync();
+        chart.timeScale().unsubscribeVisibleTimeRangeChange(onSyncTimeRangeChange);
+        unsubTimeRangeSync();
         unsubCrosshairSync();
         chartSyncService.clearCrosshair(panelInstanceId);
         unsubTrades();
@@ -624,6 +640,15 @@ export default function ChartPanel({
       // safe ignore
     }
   }, [crosshairMode]);
+
+  // Listen for timeframe changes triggered from the Fullscreen Hotbar
+  useEffect(() => {
+    const handleHotbarTf = (e: any) => {
+      if (e?.detail) setTimeframe(e.detail);
+    };
+    window.addEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
+    return () => window.removeEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
+  }, []);
 
   // Risk / Reward computations
   const rrCalculation = useMemo(() => {
