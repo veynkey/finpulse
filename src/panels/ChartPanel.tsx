@@ -23,6 +23,8 @@ import {
   DollarSign,
   Trash2,
   Info,
+  Link2,
+  Unlink,
 } from 'lucide-react';
 import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
@@ -73,6 +75,23 @@ export default function ChartPanel({
   const isSyncingRangeRef = useRef(false);
   const [mirroredCrosshairX, setMirroredCrosshairX] = useState<number | null>(null);
   const [mirroredTime, setMirroredTime] = useState<number | null>(null);
+
+  // Sync mode toggle: Synchronized with Main Chart vs Independent Decoupled
+  const [isSyncEnabled, setIsSyncEnabled] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(`finpulse_chart_sync_${defaultGroup}`);
+      return stored !== null ? JSON.parse(stored) : true;
+    } catch {
+      return true;
+    }
+  });
+  const isSyncEnabledRef = useRef(isSyncEnabled);
+  useEffect(() => {
+    isSyncEnabledRef.current = isSyncEnabled;
+    try {
+      localStorage.setItem(`finpulse_chart_sync_${defaultGroup}`, JSON.stringify(isSyncEnabled));
+    } catch {}
+  }, [isSyncEnabled, defaultGroup]);
 
   // Indicators toggle state
   const [enabledIndicators, setEnabledIndicators] = useState<{
@@ -247,6 +266,7 @@ export default function ChartPanel({
 
       // Continuous Logical Range 60fps pan/zoom sync
       const onSyncLogicalRangeChange = (logicalRange: any) => {
+        if (!isSyncEnabledRef.current) return;
         if (!logicalRange || isSyncingRangeRef.current) return;
         if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
           chartSyncService.broadcastLogicalRange(panelInstanceId, {
@@ -258,6 +278,7 @@ export default function ChartPanel({
       chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncLogicalRangeChange);
 
       const unsubLogicalSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+        if (!isSyncEnabledRef.current) return;
         if (!chartRef.current) return;
         isSyncingRangeRef.current = true;
         try {
@@ -272,6 +293,7 @@ export default function ChartPanel({
 
       // Synchronize visible Time Range (Fallback across intervals / symbols)
       const onSyncTimeRangeChange = (timeRange: any) => {
+        if (!isSyncEnabledRef.current) return;
         if (!timeRange || isSyncingRangeRef.current) return;
         if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
           chartSyncService.broadcastTimeRange(panelInstanceId, {
@@ -284,6 +306,7 @@ export default function ChartPanel({
 
       // Listen for incoming time range changes
       const unsubTimeRangeSync = chartSyncService.subscribeTimeRange(panelInstanceId, (timeRange) => {
+        if (!isSyncEnabledRef.current) return;
         if (!chartRef.current) return;
         isSyncingRangeRef.current = true;
         try {
@@ -298,6 +321,10 @@ export default function ChartPanel({
 
       // Synchronize Crosshair move
       chart.subscribeCrosshairMove((param) => {
+        if (!isSyncEnabledRef.current) {
+          chartSyncService.clearCrosshair(panelInstanceId);
+          return;
+        }
         if (!param.point || !param.time) {
           chartSyncService.clearCrosshair(panelInstanceId);
           return;
@@ -309,6 +336,11 @@ export default function ChartPanel({
 
       // Listen for incoming mirrored crosshair moves
       const unsubCrosshairSync = chartSyncService.subscribeCrosshair(panelInstanceId, (point) => {
+        if (!isSyncEnabledRef.current) {
+          setMirroredCrosshairX(null);
+          setMirroredTime(null);
+          return;
+        }
         if (!chartRef.current || !chartContainerRef.current) return;
         if (chartContainerRef.current.clientWidth === 0 || chartContainerRef.current.clientHeight === 0) {
           return;
@@ -985,6 +1017,34 @@ export default function ChartPanel({
               <>
                 <Crosshair size={11} className="text-muted" />
                 <span>LELUASA</span>
+              </>
+            )}
+          </button>
+
+          {/* Sync Mode Toggle: SYNC ON vs INDEPENDENT */}
+          <button
+            type="button"
+            onClick={() => setIsSyncEnabled((prev) => !prev)}
+            className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors flex items-center space-x-1.5 cursor-pointer ${
+              isSyncEnabled
+                ? 'bg-[#00c087]/15 text-[#00c087] border-[#00c087]/40 hover:bg-[#00c087]/25'
+                : 'bg-yellow-500/15 text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/25'
+            }`}
+            title={
+              isSyncEnabled
+                ? 'Chart tersinkronisasi dengan Main Chart / Desk lain (Pan & Zoom sinkron). Klik untuk beralih ke Mode Bebas / Independent.'
+                : 'Chart independen / decoupled. Anda bebas menggeser, zoom, dan melihat riwayat tanpa mempengaruhi atau dipengaruhi chart lain. Klik untuk sinkron kembali.'
+            }
+          >
+            {isSyncEnabled ? (
+              <>
+                <Link2 size={11} className="text-[#00c087]" />
+                <span>SYNC ON</span>
+              </>
+            ) : (
+              <>
+                <Unlink size={11} className="text-yellow-400" />
+                <span>INDEPENDENT</span>
               </>
             )}
           </button>

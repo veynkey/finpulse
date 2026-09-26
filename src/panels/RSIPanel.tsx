@@ -3,6 +3,7 @@ import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
 import { calculateRSI } from '../utils/indicators';
 import PanelHeader from './PanelHeader';
+import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
 import { Activity, Zap } from 'lucide-react';
 
@@ -146,8 +147,9 @@ export default function RSIPanel({ defaultGroup = 'BLUE' }: RSIPanelProps) {
         onLinkGroupChange={setCurrentGroup}
         actions={
           <div className="flex items-center space-x-2 text-[10px]">
-            <span className="text-muted">Periode:</span>
-            <span className="font-bold text-accent px-1.5 py-0.5 rounded bg-accent/10 border border-accent/30">
+            <QuickCoinSelector currentGroup={currentGroup} compact />
+            <span className="text-muted hidden md:inline">Periode:</span>
+            <span className="font-bold text-accent px-1.5 py-0.5 rounded bg-accent/10 border border-accent/30 hidden md:inline">
               14
             </span>
           </div>

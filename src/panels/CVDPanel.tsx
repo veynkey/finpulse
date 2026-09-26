@@ -19,6 +19,8 @@ import {
   Maximize2,
   Minimize2,
   Activity,
+  Link2,
+  Unlink,
 } from 'lucide-react';
 import { useTerminal } from '../context/TerminalContext';
 import { chartSyncService } from '../services/chartSyncService';
@@ -119,6 +121,23 @@ export default function CVDPanel({
   const isSyncingRangeRef = useRef(false);
   const [mirroredCrosshairX, setMirroredCrosshairX] = useState<number | null>(null);
   const [mirroredTime, setMirroredTime] = useState<number | null>(null);
+
+  // Sync mode toggle: Synchronized with Main Chart vs Independent Decoupled
+  const [isSyncEnabled, setIsSyncEnabled] = useState<boolean>(() => {
+    try {
+      const stored = localStorage.getItem(`finpulse_cvd_sync_${defaultGroup}`);
+      return stored !== null ? JSON.parse(stored) : true;
+    } catch {
+      return true;
+    }
+  });
+  const isSyncEnabledRef = useRef(isSyncEnabled);
+  useEffect(() => {
+    isSyncEnabledRef.current = isSyncEnabled;
+    try {
+      localStorage.setItem(`finpulse_cvd_sync_${defaultGroup}`, JSON.stringify(isSyncEnabled));
+    } catch {}
+  }, [isSyncEnabled, defaultGroup]);
 
   // Series refs
   const candleSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
@@ -383,6 +402,7 @@ export default function CVDPanel({
 
     // Continuous Logical Range 60fps pan/zoom sync
     const onSyncLogicalRange = (logicalRange: any) => {
+      if (!isSyncEnabledRef.current) return;
       if (!logicalRange || isSyncingRangeRef.current) return;
       if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
         chartSyncService.broadcastLogicalRange(panelInstanceId, {
@@ -394,6 +414,7 @@ export default function CVDPanel({
     chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncLogicalRange);
 
     const unsubLogicalSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+      if (!isSyncEnabledRef.current) return;
       if (!chartRef.current) return;
       isSyncingRangeRef.current = true;
       try {
@@ -406,6 +427,7 @@ export default function CVDPanel({
 
     // Synchronize visible Time Range (Fallback across intervals / symbols)
     const onRangeChange = (timeRange: any) => {
+      if (!isSyncEnabledRef.current) return;
       if (!timeRange || isSyncingRangeRef.current) return;
       if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
         chartSyncService.broadcastTimeRange(panelInstanceId, {
@@ -418,6 +440,7 @@ export default function CVDPanel({
 
     // Listen for incoming time range changes from normal chart or other panels
     const unsubRangeSync = chartSyncService.subscribeTimeRange(panelInstanceId, (timeRange) => {
+      if (!isSyncEnabledRef.current) return;
       if (!chartRef.current) return;
       isSyncingRangeRef.current = true;
       try {
@@ -432,6 +455,10 @@ export default function CVDPanel({
 
     // Synchronize Crosshair move
     chart.subscribeCrosshairMove((param) => {
+      if (!isSyncEnabledRef.current) {
+        chartSyncService.clearCrosshair(panelInstanceId);
+        return;
+      }
       if (!param.point || !param.time) {
         chartSyncService.clearCrosshair(panelInstanceId);
         return;
@@ -443,6 +470,11 @@ export default function CVDPanel({
 
     // Listen for incoming mirrored crosshair moves
     const unsubCrosshairSync = chartSyncService.subscribeCrosshair(panelInstanceId, (point) => {
+      if (!isSyncEnabledRef.current) {
+        setMirroredCrosshairX(null);
+        setMirroredTime(null);
+        return;
+      }
       if (!chartRef.current || !chartContainerRef.current) return;
       if (chartContainerRef.current.clientWidth === 0 || chartContainerRef.current.clientHeight === 0) {
         return;
@@ -892,6 +924,34 @@ export default function CVDPanel({
             </button>
           ))}
         </div>
+
+        {/* Sync Mode Toggle: SYNC ON vs INDEPENDENT */}
+        <button
+          type="button"
+          onClick={() => setIsSyncEnabled((prev) => !prev)}
+          className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors flex items-center space-x-1.5 cursor-pointer ${
+            isSyncEnabled
+              ? 'bg-[#00c087]/15 text-[#00c087] border-[#00c087]/40 hover:bg-[#00c087]/25'
+              : 'bg-yellow-500/15 text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/25'
+          }`}
+          title={
+            isSyncEnabled
+              ? 'CVD Chart tersinkronisasi dengan Main Chart (Pan & Zoom sinkron). Klik untuk beralih ke Mode Bebas / Independent.'
+              : 'CVD Chart independen / decoupled. Anda bebas menggeser, zoom, dan melihat riwayat tanpa mempengaruhi chart lain. Klik untuk sinkron kembali.'
+          }
+        >
+          {isSyncEnabled ? (
+            <>
+              <Link2 size={11} className="text-[#00c087]" />
+              <span>SYNC ON</span>
+            </>
+          ) : (
+            <>
+              <Unlink size={11} className="text-yellow-400" />
+              <span>INDEPENDENT</span>
+            </>
+          )}
+        </button>
       </div>
 
       {/* Summary KPI Strip: Net Delta, Buy/Sell Ratio, Absorption Indicator */}

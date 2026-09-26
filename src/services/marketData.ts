@@ -29,6 +29,14 @@ interface CandleListenerRegistration {
   callback: CandleCallback;
 }
 
+export interface TakerFlowStats {
+  buyVol: number;
+  sellVol: number;
+  buyPct: number;
+  sellPct: number;
+  cvd: number;
+}
+
 class AuthoritativeMarketDataService {
   private ws: WebSocket | null = null;
   private tradeListeners: Map<string, TradeListenerRegistration> = new Map();
@@ -36,6 +44,8 @@ class AuthoritativeMarketDataService {
   private quoteListeners: Set<QuoteCallback> = new Set();
   private bookListeners: Set<BookCallback> = new Set();
   private radarListeners: Set<RadarCallback> = new Set();
+  private takerFlowMap: Map<string, { buyVol: number; sellVol: number; cvd: number }> = new Map();
+  private takerFlowListeners: Map<string, (stats: TakerFlowStats, canonicalId: string) => void> = new Map();
 
   // Active raw symbols subscribed on Binance stream (including miniTicker array for all spot pairs)
   private activeStreams: Set<string> = new Set([
@@ -257,11 +267,40 @@ class AuthoritativeMarketDataService {
         }
       }
 
-      // Update CVD & Last Price
+      // Update CVD & Last Price & Authoritative Taker Flow
       const currentCvd = this.cvdMap.get(canonicalId) || 0;
       const delta = side === 'BUY' ? quantity : -quantity;
-      this.cvdMap.set(canonicalId, currentCvd + delta);
+      const newCvd = currentCvd + delta;
+      this.cvdMap.set(canonicalId, newCvd);
       this.lastPrices.set(canonicalId, price);
+
+      let flow = this.takerFlowMap.get(canonicalId);
+      if (!flow) {
+        flow = { buyVol: 0, sellVol: 0, cvd: 0 };
+        this.takerFlowMap.set(canonicalId, flow);
+      }
+      if (side === 'BUY') {
+        flow.buyVol += quantity;
+      } else {
+        flow.sellVol += quantity;
+      }
+      flow.cvd = newCvd;
+
+      const totalVol = flow.buyVol + flow.sellVol;
+      const buyPct = totalVol > 0 ? Math.min(99, Math.max(1, Math.round((flow.buyVol / totalVol) * 100))) : 50;
+      const flowStats: TakerFlowStats = {
+        buyVol: flow.buyVol,
+        sellVol: flow.sellVol,
+        buyPct,
+        sellPct: 100 - buyPct,
+        cvd: flow.cvd,
+      };
+
+      this.takerFlowListeners.forEach((cb) => {
+        try {
+          cb(flowStats, canonicalId);
+        } catch {}
+      });
 
       const trade: Trade = {
         id: String(data.a),
@@ -370,6 +409,76 @@ class AuthoritativeMarketDataService {
 
     return () => {
       this.tradeListeners.delete(regId);
+    };
+  }
+
+  /**
+   * Retrieves current authoritative taker orderflow stats for an instrument.
+   */
+  public getTakerFlowStats(instrumentId: string): TakerFlowStats {
+    const canonicalId = canonicalizeInstrumentId(instrumentId);
+    const flow = this.takerFlowMap.get(canonicalId);
+    if (!flow || (flow.buyVol === 0 && flow.sellVol === 0)) {
+      const candles = this.getHistoricalCandles(canonicalId, '15m');
+      if (candles.length > 0) {
+        const recent = candles.slice(-20);
+        let bVol = 0;
+        let sVol = 0;
+        for (const c of recent) {
+          const rng = c.high - c.low || 0.0001;
+          const ratio = Math.max(0.05, Math.min(0.95, (c.close - c.low) / rng));
+          bVol += c.volume * ratio;
+          sVol += c.volume * (1 - ratio);
+        }
+        const tot = bVol + sVol || 1;
+        const bPct = Math.round((bVol / tot) * 100);
+        return {
+          buyVol: bVol,
+          sellVol: sVol,
+          buyPct: bPct,
+          sellPct: 100 - bPct,
+          cvd: this.cvdMap.get(canonicalId) || 0,
+        };
+      }
+      return { buyVol: 0, sellVol: 0, buyPct: 50, sellPct: 50, cvd: 0 };
+    }
+
+    const total = flow.buyVol + flow.sellVol;
+    const buyPct = total > 0 ? Math.min(99, Math.max(1, Math.round((flow.buyVol / total) * 100))) : 50;
+    return {
+      buyVol: flow.buyVol,
+      sellVol: flow.sellVol,
+      buyPct,
+      sellPct: 100 - buyPct,
+      cvd: flow.cvd,
+    };
+  }
+
+  /**
+   * Subscribes to authoritative real-time taker orderflow stats.
+   * Both OrderFlowPanel and VolumeAnalysisPanel use this so their metrics match 100%.
+   */
+  public subscribeTakerFlow(
+    instrumentId: string,
+    callback: (stats: TakerFlowStats) => void
+  ): () => void {
+    const canonicalId = canonicalizeInstrumentId(instrumentId);
+    const regId = `taker_${canonicalId}_${Math.random()}`;
+
+    // Immediately dispatch initial snapshot
+    callback(this.getTakerFlowStats(canonicalId));
+
+    this.takerFlowListeners.set(regId, (stats, targetId) => {
+      if (targetId === canonicalId) {
+        callback(stats);
+      }
+    });
+
+    const rawSym = canonicalId.split(':').pop() || 'BTCUSDT';
+    this.ensureStreamSubscription(rawSym);
+
+    return () => {
+      this.takerFlowListeners.delete(regId);
     };
   }
 

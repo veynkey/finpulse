@@ -3,6 +3,7 @@ import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
 import { calculateEMA } from '../utils/indicators';
 import PanelHeader from './PanelHeader';
+import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
 import { Compass, Gauge, Shield, CheckCircle } from 'lucide-react';
 
@@ -175,9 +176,10 @@ export default function RegimeIndicatorPanel({ defaultGroup = 'BLUE' }: RegimeIn
         onLinkGroupChange={setCurrentGroup}
         actions={
           <div className="flex items-center space-x-2 text-[10px]">
-            <span className="text-muted">CHOP:</span>
+            <QuickCoinSelector currentGroup={currentGroup} compact />
+            <span className="text-muted hidden md:inline">CHOP:</span>
             <span
-              className={`font-bold px-1.5 py-0.5 rounded ${
+              className={`font-bold px-1.5 py-0.5 rounded hidden md:inline ${
                 chopIndex > 61.8 ? 'bg-yellow-500/20 text-yellow-400' : 'bg-[#00c087]/20 text-[#00c087]'
               }`}
             >

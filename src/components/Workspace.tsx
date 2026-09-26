@@ -33,6 +33,7 @@ import {
   ExternalLink,
   Monitor,
 } from 'lucide-react';
+import QuickCoinSelector from './QuickCoinSelector';
 
 // Panels
 import WatchlistPanel from '../panels/WatchlistPanel';
@@ -760,6 +761,11 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
             <span className="font-bold">{activePreset.name}</span>
             <ChevronDown size={10} className="text-muted" />
           </button>
+        </div>
+
+        {/* Center: Quick Coin Switcher Ribbon */}
+        <div className="flex items-center space-x-2">
+          <QuickCoinSelector currentGroup="BLUE" />
         </div>
 
         {/* Right: Add Panel, Tool Library, Reset */}

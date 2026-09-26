@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTerminal } from '../context/TerminalContext';
-import { marketData } from '../services/marketData';
+import { marketData, type TakerFlowStats } from '../services/marketData';
 import type { LinkGroup, Trade } from '../types';
 import PanelHeader from './PanelHeader';
 
@@ -9,37 +9,29 @@ export default function OrderFlowPanel({ defaultGroup = 'BLUE' }: { defaultGroup
   const [linkGroup, setLinkGroup] = useState<LinkGroup>(defaultGroup);
   const activeInstrument = getSymbolForGroup(linkGroup);
   const [trades, setTrades] = useState<Trade[]>([]);
-  const [buyVol, setBuyVol] = useState(0);
-  const [sellVol, setSellVol] = useState(0);
-  const [cvd, setCvd] = useState(0);
+  const [flowStats, setFlowStats] = useState<TakerFlowStats>(() =>
+    marketData.getTakerFlowStats(activeInstrument.id)
+  );
 
   useEffect(() => {
-    // Reset when instrument changes
+    // Reset trade tape when instrument changes
     setTrades([]);
-    setBuyVol(0);
-    setSellVol(0);
-    setCvd(0);
 
     const canonicalId = activeInstrument.id;
-    const unsub = marketData.subscribeTrades(canonicalId, 1, (trade) => {
+    const unsubFlow = marketData.subscribeTakerFlow(canonicalId, (stats) => {
+      setFlowStats(stats);
+    });
+    const unsubTrades = marketData.subscribeTrades(canonicalId, 1, (trade) => {
       setTrades((prev) => [trade, ...prev.slice(0, 40)]);
-      if (trade.side === 'BUY') {
-        setBuyVol((prev) => prev + trade.quantity);
-        setCvd((prev) => prev + trade.quantity);
-      } else {
-        setSellVol((prev) => prev + trade.quantity);
-        setCvd((prev) => prev - trade.quantity);
-      }
     });
 
     return () => {
-      unsub();
+      unsubFlow();
+      unsubTrades();
     };
   }, [activeInstrument.id]);
 
-  const totalVol = buyVol + sellVol || 1;
-  const buyPct = Math.round((buyVol / totalVol) * 100);
-  const sellPct = 100 - buyPct;
+  const { buyPct, sellPct, cvd } = flowStats;
 
   return (
     <div className="flex flex-col h-full bg-[#0b0c10] text-xs font-mono select-none">

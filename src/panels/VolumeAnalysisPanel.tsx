@@ -1,7 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTerminal } from '../context/TerminalContext';
-import { marketData } from '../services/marketData';
+import { marketData, type TakerFlowStats } from '../services/marketData';
 import PanelHeader from './PanelHeader';
+import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
 import { BarChart2, Flame, ArrowUpRight, ArrowDownRight, AlertTriangle } from 'lucide-react';
 
@@ -14,18 +15,26 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
   const [currentGroup, setCurrentGroup] = useState<LinkGroup>(defaultGroup);
   const activeInstrument = getSymbolForGroup(currentGroup);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [flowStats, setFlowStats] = useState<TakerFlowStats>(() =>
+    marketData.getTakerFlowStats(activeInstrument?.id || 'BTC-USDT:BINANCE')
+  );
 
   const symbol = activeInstrument?.symbol || 'BTCUSDT';
   const displaySymbol = symbol.replace('USDT', '/USDT');
 
-  // Load candles for active coin
+  // Load candles and subscribe to authoritative taker flow for active coin
   useEffect(() => {
     if (!activeInstrument) return;
     const data = marketData.getHistoricalCandles(activeInstrument.id, '15m');
     setCandles(data);
 
+    // Synchronize authoritative taker pressure matching OrderFlowPanel
+    const unsubFlow = marketData.subscribeTakerFlow(activeInstrument.id, (stats) => {
+      setFlowStats(stats);
+    });
+
     const gen = Date.now();
-    const unsub = marketData.subscribeAuthoritativeCandles(
+    const unsubCandles = marketData.subscribeAuthoritativeCandles(
       activeInstrument.id,
       '15m',
       gen,
@@ -41,8 +50,11 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
       }
     );
 
-    return () => unsub();
-  }, [activeInstrument.id]);
+    return () => {
+      unsubFlow();
+      unsubCandles();
+    };
+  }, [activeInstrument?.id]);
 
   // Compute Volume Dynamics & RVOL
   const volumeStats = useMemo(() => {
@@ -51,7 +63,6 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
         rvol: 1.0,
         avgVol20: 1000,
         currentVol: 1000,
-        buyPressurePct: 50,
         isSpike: false,
         spikeMultiplier: 1.0,
         volumeTrend: 'NORMAL',
@@ -66,10 +77,6 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
     const rvol = avgVol20 > 0 ? currentVol / avgVol20 : 1.0;
     const isSpike = rvol >= 1.75;
 
-    // Approximate taker buy vs sell pressure from close position within bar range
-    const range = current.high - current.low || 0.0001;
-    const buyPressurePct = Math.min(95, Math.max(5, Math.round(((current.close - current.low) / range) * 100)));
-
     const volumeTrend =
       rvol >= 2.0
         ? 'EXTREME SURGE'
@@ -83,14 +90,13 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
       rvol,
       avgVol20,
       currentVol,
-      buyPressurePct,
       isSpike,
       spikeMultiplier: Math.round(rvol * 10) / 10,
       volumeTrend,
     };
   }, [candles]);
 
-  const { rvol, avgVol20, currentVol, buyPressurePct, isSpike, spikeMultiplier, volumeTrend } = volumeStats;
+  const { rvol, avgVol20, currentVol, isSpike, spikeMultiplier, volumeTrend } = volumeStats;
 
   return (
     <div className="flex flex-col h-full bg-[#07080a] text-text font-mono select-none overflow-hidden">
@@ -100,13 +106,14 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
         onLinkGroupChange={setCurrentGroup}
         actions={
           <div className="flex items-center space-x-2 text-[10px]">
+            <QuickCoinSelector currentGroup={currentGroup} compact />
             {isSpike && (
               <span className="flex items-center gap-1 bg-[#f6465d]/20 text-[#f6465d] border border-[#f6465d]/50 px-2 py-0.5 rounded font-bold animate-pulse">
                 <Flame size={11} />
                 SPIKE {spikeMultiplier}x
               </span>
             )}
-            <span className="text-muted">RVOL:</span>
+            <span className="text-muted hidden md:inline">RVOL:</span>
             <span className={`font-bold ${rvol >= 1.5 ? 'text-[#00c087]' : 'text-text'}`}>
               {rvol.toFixed(2)}x
             </span>
@@ -157,8 +164,8 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
               TAKER ORDERFLOW PRESSURE (BUY VS SELL INTENSITY)
             </span>
             <span className="text-[9px] text-muted">
-              Pembeli: <strong className="text-[#00c087]">{buyPressurePct}%</strong> | Penjual:{' '}
-              <strong className="text-[#f6465d]">{100 - buyPressurePct}%</strong>
+              Pembeli: <strong className="text-[#00c087]">{flowStats.buyPct}%</strong> | Penjual:{' '}
+              <strong className="text-[#f6465d]">{flowStats.sellPct}%</strong>
             </span>
           </div>
 
@@ -166,24 +173,24 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
           <div className="w-full h-4 bg-[#12151c] rounded overflow-hidden flex border border-border/40">
             <div
               className="bg-[#00c087] h-full flex items-center justify-start pl-2 text-[9px] font-extrabold text-black transition-all duration-300"
-              style={{ width: `${buyPressurePct}%` }}
+              style={{ width: `${flowStats.buyPct}%` }}
             >
-              {buyPressurePct > 20 && `${buyPressurePct}%`}
+              {flowStats.buyPct > 20 && `${flowStats.buyPct}%`}
             </div>
             <div
               className="bg-[#f6465d] h-full flex items-center justify-end pr-2 text-[9px] font-extrabold text-white transition-all duration-300"
-              style={{ width: `${100 - buyPressurePct}%` }}
+              style={{ width: `${flowStats.sellPct}%` }}
             >
-              {100 - buyPressurePct > 20 && `${100 - buyPressurePct}%`}
+              {flowStats.sellPct > 20 && `${flowStats.sellPct}%`}
             </div>
           </div>
 
           <div className="flex justify-between text-[9px] text-muted font-mono">
             <span className="flex items-center gap-0.5 text-[#00c087] font-bold">
-              <ArrowUpRight size={10} /> Dominasi Beli (Aggressive Buyers)
+              <ArrowUpRight size={10} /> Dominasi Beli (Aggressive Buyers: {flowStats.buyVol.toFixed(2)})
             </span>
             <span className="flex items-center gap-0.5 text-[#f6465d] font-bold">
-              Dominasi Jual (Aggressive Sellers) <ArrowDownRight size={10} />
+              Dominasi Jual (Aggressive Sellers: {flowStats.sellVol.toFixed(2)}) <ArrowDownRight size={10} />
             </span>
           </div>
         </div>

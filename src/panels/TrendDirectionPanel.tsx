@@ -3,6 +3,7 @@ import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
 import { calculateEMA, calculateSMA } from '../utils/indicators';
 import PanelHeader from './PanelHeader';
+import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
 import { TrendingUp, TrendingDown, Activity, Compass, ShieldCheck } from 'lucide-react';
 
@@ -198,9 +199,10 @@ export default function TrendDirectionPanel({ defaultGroup = 'BLUE' }: TrendDire
         onLinkGroupChange={setCurrentGroup}
         actions={
           <div className="flex items-center space-x-2 text-[10px]">
-            <span className="flex items-center gap-1 bg-[#12151c] px-2 py-0.5 rounded border border-border/60">
+            <QuickCoinSelector currentGroup={currentGroup} compact />
+            <span className="flex items-center gap-1 bg-[#12151c] px-2 py-0.5 rounded border border-border/60 hidden md:inline-flex">
               <Compass size={11} className="text-accent" />
-              <span className="text-muted">Koin Aktif:</span>
+              <span className="text-muted">Koin:</span>
               <span className="text-accent font-bold">{displaySymbol}</span>
             </span>
           </div>
