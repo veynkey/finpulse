@@ -560,8 +560,16 @@ export default function ChartPanel({
       const currentGen = ++subscriptionGenerationRef.current;
       setIsLoadingHistory(candles.length === 0);
 
-      // Track whether the primary series has received its first full dataset.
-      // Subsequent updates use update() instead of setData() to prevent flickering.
+      // Loading watchdog: auto-dismiss spinner after 5s so chart is never stuck on black screen
+      let loadingWatchdog: ReturnType<typeof setTimeout> | null = null;
+      if (candles.length === 0) {
+        loadingWatchdog = setTimeout(() => {
+          setIsLoadingHistory(false);
+        }, 5000);
+      }
+
+      // Track earliest loaded time for deterministic backfill detection
+      let earliestLoadedTime: number = candles.length > 0 ? candles[0].time : Infinity;
       let primarySeriesHasData = candles.length > 0;
 
       // Listen for background REST updates via Stale-While-Revalidate mirror cache
@@ -575,7 +583,7 @@ export default function ChartPanel({
 
         try {
           if (!primarySeriesHasData) {
-            // Initial population: chart was empty, needs full setData then scroll to latest
+            // Initial population: chart was empty, needs full setData then fit viewport
             const savedLogical = chartRef.current.timeScale().getVisibleLogicalRange?.();
             if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
               primarySeries.setData(displayCandles.map((c) => ({ time: c.time, value: c.close })) as any);
@@ -590,11 +598,12 @@ export default function ChartPanel({
               })) as any
             );
             primarySeriesHasData = true;
+            earliestLoadedTime = displayCandles[0].time;
             try {
               if (savedLogical) {
                 chartRef.current.timeScale().setVisibleLogicalRange(savedLogical);
               } else {
-                chartRef.current.timeScale().scrollToRealTime();
+                chartRef.current.timeScale().fitContent();
               }
             } catch {}
 
@@ -612,8 +621,11 @@ export default function ChartPanel({
             if (enabledIndicators.rsi) indicatorSeriesRef.current.get('rsi')?.setData(calculateRSI(freshCandles, 14) as any);
           } else {
             // Detect whether new historical bars were prepended (infinite scroll backfill)
-            const freshFirstTime = freshCandles.length > 0 ? freshCandles[0].time : null;
-            const isBackfillUpdate = freshFirstTime !== null && freshFirstTime < (displayCandles[0]?.time ?? Infinity);
+            const freshFirstTime = displayCandles.length > 0 ? displayCandles[0].time : null;
+            const isBackfillUpdate = freshFirstTime !== null && freshFirstTime < earliestLoadedTime;
+            if (freshFirstTime !== null) {
+              earliestLoadedTime = Math.min(earliestLoadedTime, freshFirstTime);
+            }
 
             if (isBackfillUpdate) {
               // Backward scroll backfill: must re-render all but preserve the current viewport
@@ -692,22 +704,44 @@ export default function ChartPanel({
         (authoritativeCandle, _isClosed, token) => {
           if (token?.generation !== currentGen || token?.instrumentId !== canonicalActiveId) return;
           setIsLoadingHistory(false);
+          if (loadingWatchdog !== null) {
+            clearTimeout(loadingWatchdog);
+            loadingWatchdog = null;
+          }
 
           try {
-            if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
-              primarySeries.update({ time: authoritativeCandle.time, value: authoritativeCandle.close });
+            if (!primarySeriesHasData) {
+              // If initial REST history is still downloading, render the live bar immediately so the screen is not blank
+              if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
+                primarySeries.setData([{ time: authoritativeCandle.time, value: authoritativeCandle.close }] as any);
+              } else {
+                primarySeries.setData([authoritativeCandle as any]);
+              }
+              volumeSeries.setData([
+                {
+                  time: authoritativeCandle.time,
+                  value: authoritativeCandle.volume,
+                  color: authoritativeCandle.close >= authoritativeCandle.open ? 'rgba(0, 200, 83, 0.4)' : 'rgba(255, 61, 0, 0.4)',
+                },
+              ] as any);
+              primarySeriesHasData = true;
+              chartRef.current?.timeScale().fitContent();
             } else {
-              primarySeries.update(authoritativeCandle as any);
-            }
+              if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
+                primarySeries.update({ time: authoritativeCandle.time, value: authoritativeCandle.close });
+              } else {
+                primarySeries.update(authoritativeCandle as any);
+              }
 
-            volumeSeries.update({
-              time: authoritativeCandle.time,
-              value: authoritativeCandle.volume,
-              color:
-                authoritativeCandle.close >= authoritativeCandle.open
-                  ? 'rgba(0, 200, 83, 0.4)'
-                  : 'rgba(255, 61, 0, 0.4)',
-            } as any);
+              volumeSeries.update({
+                time: authoritativeCandle.time,
+                value: authoritativeCandle.volume,
+                color:
+                  authoritativeCandle.close >= authoritativeCandle.open
+                    ? 'rgba(0, 200, 83, 0.4)'
+                    : 'rgba(255, 61, 0, 0.4)',
+              } as any);
+            }
 
             setLastStats({
               open: authoritativeCandle.open,

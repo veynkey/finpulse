@@ -543,9 +543,18 @@ class AssetRegistryService {
   private async triggerDynamicDiscovery() {
     if (this.isDiscovered) return;
     try {
-      const res = await fetch('https://api.binance.com/api/v3/exchangeInfo?permissions=SPOT');
-      if (!res.ok) return;
-      const data = await res.json();
+      let data: any = null;
+      for (const base of ['https://data-api.binance.vision', 'https://api.binance.com', 'https://api1.binance.com']) {
+        try {
+          const res = await fetch(`${base}/api/v3/exchangeInfo?permissions=SPOT`);
+          if (res.ok) {
+            data = await res.json();
+            break;
+          }
+        } catch {
+          // try next mirror
+        }
+      }
       if (!data?.symbols || !Array.isArray(data.symbols)) return;
 
       const discovered: Instrument[] = [];

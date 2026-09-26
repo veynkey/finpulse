@@ -37,6 +37,14 @@ export interface TakerFlowStats {
   cvd: number;
 }
 
+export const BINANCE_REST_ENDPOINTS = [
+  'https://data-api.binance.vision',
+  'https://api.binance.com',
+  'https://api1.binance.com',
+  'https://api2.binance.com',
+  'https://api3.binance.com',
+];
+
 class AuthoritativeMarketDataService {
   private ws: WebSocket | null = null;
   private tradeListeners: Map<string, TradeListenerRegistration> = new Map();
@@ -71,6 +79,37 @@ class AuthoritativeMarketDataService {
   private realMessageCount = 0;
   private messageRatePerSec = 0;
   private lastPingLatency = 24;
+  private activeEndpointIndex = 0;
+
+  /**
+   * Resilient Binance REST fetch with automatic multi-mirror failover.
+   * Cycles across data-api.binance.vision, api.binance.com, api1/2/3 so that if an ISP
+   * blocks api.binance.com (common in Indonesia/censored regions), it automatically falls back
+   * seamlessly within milliseconds without breaking charts, orderflow, or indicators.
+   */
+  public async fetchBinanceWithFallback<T = any>(pathAndQuery: string, timeoutMs = 4500): Promise<T | null> {
+    for (let i = 0; i < BINANCE_REST_ENDPOINTS.length; i++) {
+      const idx = (this.activeEndpointIndex + i) % BINANCE_REST_ENDPOINTS.length;
+      const base = BINANCE_REST_ENDPOINTS[idx];
+      const url = `${base}${pathAndQuery}`;
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const res = await fetch(url, { signal: controller.signal });
+        clearTimeout(timer);
+        if (res.ok) {
+          this.activeEndpointIndex = idx; // Remember working healthy endpoint
+          return (await res.json()) as T;
+        }
+      } catch {
+        clearTimeout(timer);
+        // Continue to next mirror endpoint
+      }
+    }
+    return null;
+  }
 
   constructor() {
     this.connect();
@@ -584,31 +623,27 @@ class AuthoritativeMarketDataService {
 
     try {
       const symParam = encodeURIComponent(JSON.stringify(cryptoSymbols));
-      const url = `https://api.binance.com/api/v3/ticker/24hr?symbols=${symParam}`;
-      const res = await fetch(url);
-      if (res.ok) {
-        const tickers = await res.json();
-        if (Array.isArray(tickers)) {
-          for (const t of tickers) {
-            const canonicalId = canonicalizeInstrumentId(t.symbol);
-            const price = parseFloat(t.lastPrice);
-            const change = parseFloat(t.priceChangePercent);
-            if (Number.isFinite(price) && price > 0) {
-              this.lastPrices.set(canonicalId, price);
-              result[canonicalId] = { price, change };
-              result[t.symbol] = { price, change };
+      const tickers = await this.fetchBinanceWithFallback<any[]>(`/api/v3/ticker/24hr?symbols=${symParam}`, 5000);
+      if (Array.isArray(tickers)) {
+        for (const t of tickers) {
+          const canonicalId = canonicalizeInstrumentId(t.symbol);
+          const price = parseFloat(t.lastPrice);
+          const change = parseFloat(t.priceChangePercent);
+          if (Number.isFinite(price) && price > 0) {
+            this.lastPrices.set(canonicalId, price);
+            result[canonicalId] = { price, change };
+            result[t.symbol] = { price, change };
 
-              const quote: Quote = {
-                instrumentId: canonicalId,
-                bid: parseFloat(t.bidPrice) || price,
-                ask: parseFloat(t.askPrice) || price,
-                bidSize: parseFloat(t.bidQty) || 1,
-                askSize: parseFloat(t.askQty) || 1,
-                timestamp: t.closeTime || Date.now(),
-                change24h: change,
-              };
-              this.quoteListeners.forEach((cb) => cb(quote));
-            }
+            const quote: Quote = {
+              instrumentId: canonicalId,
+              bid: parseFloat(t.bidPrice) || price,
+              ask: parseFloat(t.askPrice) || price,
+              bidSize: parseFloat(t.bidQty) || 1,
+              askSize: parseFloat(t.askQty) || 1,
+              timestamp: t.closeTime || Date.now(),
+              change24h: change,
+            };
+            this.quoteListeners.forEach((cb) => cb(quote));
           }
         }
       }
@@ -710,12 +745,10 @@ class AuthoritativeMarketDataService {
 
     try {
       const startTimeParam = coverage ? `&startTime=${(coverage.endTime + 1) * 1000}` : '';
-      const url = `https://api.binance.com/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000${startTimeParam}`;
-
-      const res = await fetch(url);
-      if (!res.ok) return;
-
-      const klines = await res.json();
+      const klines = await this.fetchBinanceWithFallback<any[]>(
+        `/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000${startTimeParam}`,
+        5000
+      );
       if (!Array.isArray(klines) || klines.length === 0) return;
 
       const validatedBars: Candle[] = [];
@@ -754,11 +787,10 @@ class AuthoritativeMarketDataService {
 
         while (startMs < nowMs && loopCount < 5) {
           loopCount++;
-          const url = `https://api.binance.com/api/v3/klines?symbol=${rawSym}&interval=1d&limit=1000&startTime=${startMs}`;
-          const res = await fetch(url);
-          if (!res.ok) break;
-
-          const klines = await res.json();
+          const klines = await this.fetchBinanceWithFallback<any[]>(
+            `/api/v3/klines?symbol=${rawSym}&interval=1d&limit=1000&startTime=${startMs}`,
+            5000
+          );
           if (!Array.isArray(klines) || klines.length === 0) break;
 
           for (const k of klines) {
@@ -784,11 +816,10 @@ class AuthoritativeMarketDataService {
         let endTimeParam = '';
 
         for (let b = 0; b < 2; b++) {
-          const url = `https://api.binance.com/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000${endTimeParam}`;
-          const res = await fetch(url);
-          if (!res.ok) break;
-
-          const klines = await res.json();
+          const klines = await this.fetchBinanceWithFallback<any[]>(
+            `/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000${endTimeParam}`,
+            5000
+          );
           if (!Array.isArray(klines) || klines.length === 0) break;
 
           const batchBars: Candle[] = [];
@@ -810,11 +841,10 @@ class AuthoritativeMarketDataService {
       }
 
       // Standard single 1,000-candle batch
-      const url = `https://api.binance.com/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000`;
-      const res = await fetch(url);
-      if (!res.ok) return [];
-
-      const klines = await res.json();
+      const klines = await this.fetchBinanceWithFallback<any[]>(
+        `/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000`,
+        5000
+      );
       if (!Array.isArray(klines) || klines.length === 0) return [];
 
       const validatedBars: Candle[] = [];
@@ -849,11 +879,10 @@ class AuthoritativeMarketDataService {
     const interval = timeframe.toLowerCase();
 
     try {
-      const url = `https://api.binance.com/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000&endTime=${oldestTimeSec * 1000 - 1}`;
-      const res = await fetch(url);
-      if (!res.ok) return 0;
-
-      const klines = await res.json();
+      const klines = await this.fetchBinanceWithFallback<any[]>(
+        `/api/v3/klines?symbol=${rawSym}&interval=${interval}&limit=1000&endTime=${oldestTimeSec * 1000 - 1}`,
+        5000
+      );
       if (!Array.isArray(klines) || klines.length === 0) return 0;
 
       const validatedBars: Candle[] = [];
@@ -952,8 +981,8 @@ class AuthoritativeMarketDataService {
   public async measurePingLatency(): Promise<number> {
     try {
       const start = performance.now();
-      const res = await fetch('https://api.binance.com/api/v3/ping');
-      if (res.ok) {
+      const res = await this.fetchBinanceWithFallback('/api/v3/ping', 2500);
+      if (res !== null) {
         this.lastPingLatency = Math.round(performance.now() - start);
       }
     } catch {

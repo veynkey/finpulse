@@ -25,6 +25,7 @@ import {
 import { useTerminal } from '../context/TerminalContext';
 import { chartSyncService } from '../services/chartSyncService';
 import { canonicalizeInstrumentId } from '../services/instruments';
+import { marketData } from '../services/marketData';
 import type { LinkGroup } from '../types';
 import PanelHeader from './PanelHeader';
 
@@ -239,13 +240,25 @@ export default function CVDPanel({
     const tf = timeframe;
 
     try {
-      const spotUrl = `https://api.binance.com/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=1000`;
-      const futUrl = `https://fapi.binance.com/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=1000`;
+      const fetchSpot = async () => {
+        const data = await marketData.fetchBinanceWithFallback<any[]>(
+          `/api/v3/klines?symbol=${symbol}&interval=${tf}&limit=1000`,
+          5000
+        );
+        return Array.isArray(data) ? data : [];
+      };
 
-      const [spotRes, futRes] = await Promise.allSettled([
-        fetch(spotUrl).then((r) => (r.ok ? r.json() : [])),
-        fetch(futUrl).then((r) => (r.ok ? r.json() : [])),
-      ]);
+      const fetchFut = async () => {
+        for (const base of ['https://fapi.binance.com', 'https://fapi1.binance.com']) {
+          try {
+            const r = await fetch(`${base}/fapi/v1/klines?symbol=${symbol}&interval=${tf}&limit=1000`);
+            if (r.ok) return await r.json();
+          } catch {}
+        }
+        return [];
+      };
+
+      const [spotRes, futRes] = await Promise.allSettled([fetchSpot(), fetchFut()]);
 
       const rawSpot = spotRes.status === 'fulfilled' && Array.isArray(spotRes.value) ? spotRes.value : [];
       const rawFut = futRes.status === 'fulfilled' && Array.isArray(futRes.value) ? futRes.value : [];
