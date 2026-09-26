@@ -464,7 +464,119 @@ export const MACRO_PRESET: WorkspacePresetConfig = {
   },
 };
 
-// 6. BLANK PRESET (Clean Slate)
+// 6. QUANT & INDICATORS PRESET (Quantitative Intelligence Workstation)
+export const QUANT_INDICATORS_PRESET: WorkspacePresetConfig = {
+  id: 'QUANT_INDICATORS',
+  name: 'Quant & Indicators Workstation',
+  description: 'Dedicated quantitative analysis workstation featuring Main Chart, Trend Direction Gauges (LTTD, MID, MACRO, STTD), Price Z-Score, RSI Momentum, Volume Dynamics, and Market Regime Classifier.',
+  modelJson: {
+    global: GLOBAL_CONFIG,
+    layout: {
+      type: 'row',
+      weight: 100,
+      children: [
+        {
+          type: 'row',
+          weight: 60,
+          children: [
+            {
+              type: 'tabset',
+              weight: 62,
+              id: 'tabset_quant_chart',
+              children: [
+                {
+                  type: 'tab',
+                  name: 'CHART [BTC/USDT]',
+                  component: 'chart',
+                  id: 'tab_quant_chart',
+                  config: { contextGroup: 'BLUE' },
+                },
+              ],
+            },
+            {
+              type: 'tabset',
+              weight: 38,
+              id: 'tabset_trend_direction',
+              children: [
+                {
+                  type: 'tab',
+                  name: 'TREND DIRECTION (LTTD, MID, MACRO, STTD)',
+                  component: 'trend_direction',
+                  id: 'tab_trend_direction',
+                  config: { contextGroup: 'BLUE' },
+                },
+              ],
+            },
+          ],
+        },
+        {
+          type: 'row',
+          weight: 40,
+          children: [
+            {
+              type: 'tabset',
+              weight: 25,
+              id: 'tabset_zscore',
+              children: [
+                {
+                  type: 'tab',
+                  name: 'Z-SCORE STATS',
+                  component: 'zscore',
+                  id: 'tab_quant_zscore',
+                  config: { contextGroup: 'BLUE' },
+                },
+              ],
+            },
+            {
+              type: 'tabset',
+              weight: 25,
+              id: 'tabset_rsi',
+              children: [
+                {
+                  type: 'tab',
+                  name: 'RSI MOMENTUM',
+                  component: 'rsi_standalone',
+                  id: 'tab_quant_rsi',
+                  config: { contextGroup: 'BLUE' },
+                },
+              ],
+            },
+            {
+              type: 'tabset',
+              weight: 25,
+              id: 'tabset_vol',
+              children: [
+                {
+                  type: 'tab',
+                  name: 'VOLUME DYNAMICS',
+                  component: 'volume_analysis',
+                  id: 'tab_quant_vol',
+                  config: { contextGroup: 'BLUE' },
+                },
+              ],
+            },
+            {
+              type: 'tabset',
+              weight: 25,
+              id: 'tabset_regime',
+              children: [
+                {
+                  type: 'tab',
+                  name: 'MARKET REGIME',
+                  component: 'regime_indicator',
+                  id: 'tab_quant_regime',
+                  config: { contextGroup: 'BLUE' },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  },
+};
+
+// 7. BLANK PRESET (Clean Slate)
 export const BLANK_PRESET: WorkspacePresetConfig = {
   id: 'BLANK',
   name: 'Blank Workstation (Clean Slate)',
@@ -496,6 +608,7 @@ export const BLANK_PRESET: WorkspacePresetConfig = {
 export const BUILTIN_WORKSPACE_PRESETS: WorkspacePresetConfig[] = [
   DEFAULT_PRESET,
   TRADING_PRESET,
+  QUANT_INDICATORS_PRESET,
   RESEARCH_PRESET,
   ORDER_FLOW_PRESET,
   MACRO_PRESET,

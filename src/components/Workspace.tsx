@@ -50,6 +50,11 @@ import ReplayPanel from '../panels/ReplayPanel';
 import MarketConditionsPanel from '../panels/MarketConditionsPanel';
 import CorrelationMatrixPanel from '../panels/CorrelationMatrixPanel';
 import VolumeProfilePanel from '../panels/VolumeProfilePanel';
+import TrendDirectionPanel from '../panels/TrendDirectionPanel';
+import ZScorePanel from '../panels/ZScorePanel';
+import RSIPanel from '../panels/RSIPanel';
+import VolumeAnalysisPanel from '../panels/VolumeAnalysisPanel';
+import RegimeIndicatorPanel from '../panels/RegimeIndicatorPanel';
 
 const STORAGE_SCHEMA_VERSION = 'layout_schema_version_2';
 const STORAGE_ACTIVE_TAB = 'finpulse_active_workspace_tab';
@@ -65,6 +70,7 @@ export interface WorkspaceTab {
 const DEFAULT_WORKSPACE_TABS: WorkspaceTab[] = [
   { id: 'desk_trading', name: 'TRADING', presetId: 'TRADING' },
   { id: 'desk_cvd', name: 'CVD & ORDER FLOW', presetId: 'ORDER_FLOW' },
+  { id: 'desk_indicators', name: 'QUANT & INDICATORS', presetId: 'QUANT_INDICATORS' },
   { id: 'desk_research', name: 'RESEARCH', presetId: 'RESEARCH' },
   { id: 'desk_macro', name: 'MACRO', presetId: 'MACRO' },
 ];
@@ -88,7 +94,27 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
   const [workspaceTabs, setWorkspaceTabs] = useState<WorkspaceTab[]>(() => {
     try {
       const stored = localStorage.getItem(STORAGE_DESKS);
-      if (stored) return JSON.parse(stored);
+      if (stored) {
+        const parsed: WorkspaceTab[] = JSON.parse(stored);
+        if (!parsed.some((t) => t.id === 'desk_indicators')) {
+          const insertIdx = parsed.findIndex((t) => t.id === 'desk_cvd');
+          if (insertIdx >= 0) {
+            parsed.splice(insertIdx + 1, 0, {
+              id: 'desk_indicators',
+              name: 'QUANT & INDICATORS',
+              presetId: 'QUANT_INDICATORS',
+            });
+          } else {
+            parsed.push({
+              id: 'desk_indicators',
+              name: 'QUANT & INDICATORS',
+              presetId: 'QUANT_INDICATORS',
+            });
+          }
+          localStorage.setItem(STORAGE_DESKS, JSON.stringify(parsed));
+        }
+        return parsed;
+      }
     } catch {}
     return DEFAULT_WORKSPACE_TABS;
   });
@@ -98,14 +124,9 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
     return localStorage.getItem(STORAGE_ACTIVE_TAB) || 'desk_trading';
   });
 
-  // Listen to hotbar desk switches
-  useEffect(() => {
-    const handleSwitch = (e: any) => {
-      if (e?.detail) setActiveTabId(e.detail);
-    };
-    window.addEventListener('finpulse-switch-desk', handleSwitch);
-    return () => window.removeEventListener('finpulse-switch-desk', handleSwitch);
-  }, []);
+  const currentDeskIdRef = useRef<string>(activeTabId);
+  const isSwitchingDeskRef = useRef<boolean>(false);
+  const modelRef = useRef<Model | null>(null);
 
   // Custom presets state
   const [customPresets, setCustomPresets] = useState<WorkspacePresetConfig[]>(() => {
@@ -125,57 +146,104 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
     try {
       const savedLayout = localStorage.getItem(`finpulse_layout_${STORAGE_SCHEMA_VERSION}_${activeTabId}`);
       if (savedLayout) {
-        return Model.fromJson(JSON.parse(savedLayout));
+        const parsedModel = Model.fromJson(JSON.parse(savedLayout));
+        modelRef.current = parsedModel;
+        return parsedModel;
       }
     } catch {
       // Safe fallback
     }
-    return Model.fromJson(DEFAULT_PRESET.modelJson);
+    const defModel = Model.fromJson(DEFAULT_PRESET.modelJson);
+    modelRef.current = defModel;
+    return defModel;
   });
+
+  // Safe desk switch that saves current desk first and prevents cross-contamination
+  const handleSwitchDesk = useCallback((newDeskId: string) => {
+    if (newDeskId === currentDeskIdRef.current) return;
+    if (modelRef.current) {
+      try {
+        localStorage.setItem(
+          `finpulse_layout_${STORAGE_SCHEMA_VERSION}_${currentDeskIdRef.current}`,
+          JSON.stringify(modelRef.current.toJson())
+        );
+      } catch {}
+    }
+    isSwitchingDeskRef.current = true;
+    currentDeskIdRef.current = newDeskId;
+    setActiveTabId(newDeskId);
+  }, []);
+
+  // Listen to hotbar desk switches
+  useEffect(() => {
+    const handleSwitch = (e: any) => {
+      if (e?.detail) handleSwitchDesk(e.detail);
+    };
+    window.addEventListener('finpulse-switch-desk', handleSwitch);
+    return () => window.removeEventListener('finpulse-switch-desk', handleSwitch);
+  }, [handleSwitchDesk]);
 
   // Load layout on workspace tab switch
   useEffect(() => {
     if (!isDetachedMode) {
       localStorage.setItem(STORAGE_ACTIVE_TAB, activeTabId);
     }
+    currentDeskIdRef.current = activeTabId;
+
+    let targetModel: Model | null = null;
+    let targetPresetId = 'DEFAULT';
+
     try {
       const savedLayout = localStorage.getItem(`finpulse_layout_${STORAGE_SCHEMA_VERSION}_${activeTabId}`);
       if (savedLayout) {
-        setModel(Model.fromJson(JSON.parse(savedLayout)));
-        return;
+        targetModel = Model.fromJson(JSON.parse(savedLayout));
       }
     } catch {
       // Ignore
     }
 
-    const currentTab = workspaceTabs.find((t) => t.id === activeTabId);
-    const targetPreset =
-      BUILTIN_WORKSPACE_PRESETS.find((p) => p.id === currentTab?.presetId) || DEFAULT_PRESET;
-    setActivePresetId(targetPreset.id);
-    setModel(Model.fromJson(targetPreset.modelJson));
+    if (!targetModel) {
+      const currentTab = workspaceTabs.find((t) => t.id === activeTabId);
+      const targetPreset =
+        BUILTIN_WORKSPACE_PRESETS.find((p) => p.id === currentTab?.presetId) || DEFAULT_PRESET;
+      targetPresetId = targetPreset.id;
+      targetModel = Model.fromJson(targetPreset.modelJson);
+    }
+
+    setActivePresetId(targetPresetId);
+    setModel(targetModel);
+    modelRef.current = targetModel;
+
+    // Reset switching lockout on next animation frame after mount
+    requestAnimationFrame(() => {
+      isSwitchingDeskRef.current = false;
+    });
   }, [activeTabId, workspaceTabs, isDetachedMode]);
 
-  // Persist model changes
+  // Persist model changes reliably to active desk
   const handleModelChange = useCallback((updatedModel: Model) => {
+    modelRef.current = updatedModel;
+    if (isSwitchingDeskRef.current) return;
     try {
       const json = updatedModel.toJson();
       localStorage.setItem(
-        `finpulse_layout_${STORAGE_SCHEMA_VERSION}_${activeTabId}`,
+        `finpulse_layout_${STORAGE_SCHEMA_VERSION}_${currentDeskIdRef.current}`,
         JSON.stringify(json)
       );
     } catch {
       // Storage safe
     }
-  }, [activeTabId]);
+  }, []);
 
   // Load a preset
   const handleSelectPreset = (preset: WorkspacePresetConfig) => {
     setActivePresetId(preset.id);
     const newModel = Model.fromJson(preset.modelJson);
     setModel(newModel);
+    modelRef.current = newModel;
     try {
       localStorage.setItem(
-        `finpulse_layout_${STORAGE_SCHEMA_VERSION}_${activeTabId}`,
+        `finpulse_layout_${STORAGE_SCHEMA_VERSION}_${currentDeskIdRef.current}`,
         JSON.stringify(newModel.toJson())
       );
     } catch {
@@ -250,9 +318,14 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
 
   // Reset to default layout
   const handleResetToDefault = () => {
-    localStorage.removeItem(`finpulse_layout_${STORAGE_SCHEMA_VERSION}_${activeTabId}`);
-    setActivePresetId(DEFAULT_PRESET.id);
-    setModel(Model.fromJson(DEFAULT_PRESET.modelJson));
+    localStorage.removeItem(`finpulse_layout_${STORAGE_SCHEMA_VERSION}_${currentDeskIdRef.current}`);
+    const currentTab = workspaceTabs.find((t) => t.id === currentDeskIdRef.current);
+    const targetPreset =
+      BUILTIN_WORKSPACE_PRESETS.find((p) => p.id === currentTab?.presetId) || DEFAULT_PRESET;
+    setActivePresetId(targetPreset.id);
+    const newModel = Model.fromJson(targetPreset.modelJson);
+    setModel(newModel);
+    modelRef.current = newModel;
   };
 
   // Create new custom Desk workspace
@@ -270,7 +343,7 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
     } catch {
       // Safe fallback
     }
-    setActiveTabId(newTab.id);
+    handleSwitchDesk(newTab.id);
     setIsNewDeskOpen(false);
     setNewDeskName('');
   };
@@ -288,7 +361,7 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
       // Safe fallback
     }
     if (activeTabId === id) {
-      setActiveTabId(updated[0].id);
+      handleSwitchDesk(updated[0].id);
     }
   };
 
@@ -443,6 +516,36 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
             <ReplayPanel />
           </ErrorBoundary>
         );
+      case 'trend_direction':
+        return (
+          <ErrorBoundary fallbackTitle="Trend Direction Error">
+            <TrendDirectionPanel defaultGroup={contextGroup} />
+          </ErrorBoundary>
+        );
+      case 'zscore':
+        return (
+          <ErrorBoundary fallbackTitle="Z-Score Error">
+            <ZScorePanel defaultGroup={contextGroup} />
+          </ErrorBoundary>
+        );
+      case 'rsi_standalone':
+        return (
+          <ErrorBoundary fallbackTitle="RSI Oscillator Error">
+            <RSIPanel defaultGroup={contextGroup} />
+          </ErrorBoundary>
+        );
+      case 'volume_analysis':
+        return (
+          <ErrorBoundary fallbackTitle="Volume Dynamics Error">
+            <VolumeAnalysisPanel defaultGroup={contextGroup} />
+          </ErrorBoundary>
+        );
+      case 'regime_indicator':
+        return (
+          <ErrorBoundary fallbackTitle="Market Regime Error">
+            <RegimeIndicatorPanel defaultGroup={contextGroup} />
+          </ErrorBoundary>
+        );
       default:
         return (
           <div className="p-4 text-muted text-xs font-mono">
@@ -453,7 +556,7 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
   };
 
   // Close a single panel tab. flexlayout automatically reflows siblings into freed space.
-  // The underlying module is never destroyed — it remains available in Add Panel.
+  // The underlying module is never destroyed, it remains available in Add Panel.
   const handleClosePanel = useCallback((node: TabNode) => {
     model.doAction(Actions.deleteTab(node.getId()));
   }, [model]);
@@ -551,9 +654,10 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
       ) {
         // Allow the action to proceed, then persist on next tick
         setTimeout(() => {
+          if (isSwitchingDeskRef.current) return;
           try {
             localStorage.setItem(
-              `finpulse_layout_${STORAGE_SCHEMA_VERSION}_${activeTabId}`,
+              `finpulse_layout_${STORAGE_SCHEMA_VERSION}_${currentDeskIdRef.current}`,
               JSON.stringify(model.toJson())
             );
           } catch {
@@ -563,7 +667,7 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
       }
       return action;
     },
-    [model, activeTabId]
+    [model]
   );
 
   const allPresets = [...BUILTIN_WORKSPACE_PRESETS, ...customPresets];
@@ -583,12 +687,13 @@ export default function Workspace({ forcedDeskId, isDetachedMode = false }: Work
                 const isCustom =
                   !tab.id.startsWith('desk_trading') &&
                   !tab.id.startsWith('desk_cvd') &&
+                  !tab.id.startsWith('desk_indicators') &&
                   !tab.id.startsWith('desk_research') &&
                   !tab.id.startsWith('desk_macro');
                 return (
                   <div
                     key={tab.id}
-                    onClick={() => setActiveTabId(tab.id)}
+                    onClick={() => handleSwitchDesk(tab.id)}
                     className={`group flex items-center space-x-1.5 px-2 py-0.5 rounded text-[10px] font-bold tracking-wider transition-colors cursor-pointer ${
                       isActive
                         ? 'bg-accent text-white shadow-sm'

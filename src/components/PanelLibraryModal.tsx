@@ -136,6 +136,46 @@ export const PANEL_DEFINITIONS: PanelDefinition[] = [
     defaultWidth: 4,
     defaultHeight: 5,
   },
+  {
+    id: 'trend_direction',
+    title: 'Trend Direction Gauges (LTTD, MID, MACRO, STTD)',
+    category: 'ANALYTICS',
+    description: 'Circular radial gauges displaying multi-timeframe directional trend alignment for active coin with dynamic bullish/bearish fills.',
+    defaultWidth: 5,
+    defaultHeight: 5,
+  },
+  {
+    id: 'zscore',
+    title: 'Price & Volume Z-Score',
+    category: 'ANALYTICS',
+    description: 'Statistical standard deviation and mean reversion probability bell curve for active coin based on 20/50 lookback.',
+    defaultWidth: 4,
+    defaultHeight: 5,
+  },
+  {
+    id: 'rsi_standalone',
+    title: 'RSI Momentum Oscillator',
+    category: 'ANALYTICS',
+    description: 'Standalone multi-timeframe 14-period RSI matrix (15M, 1H, 4H, 1D) with regular and hidden divergence detection for active coin.',
+    defaultWidth: 4,
+    defaultHeight: 5,
+  },
+  {
+    id: 'volume_analysis',
+    title: 'Volume Dynamics & Flow Meter',
+    category: 'TRADING',
+    description: 'Relative volume (RVOL) multiplier, aggressive buyer vs seller pressure gauge, and volume anomaly spike alert for active coin.',
+    defaultWidth: 4,
+    defaultHeight: 5,
+  },
+  {
+    id: 'regime_indicator',
+    title: 'Market Regime & Structure Classifier',
+    category: 'ANALYTICS',
+    description: 'Mathematical Choppiness Index (CHOP) and volatility structure classifier (Trending, Choppy, Squeeze Compression) with actionable strategy playbook.',
+    defaultWidth: 4,
+    defaultHeight: 5,
+  },
 ];
 
 interface PanelLibraryModalProps {

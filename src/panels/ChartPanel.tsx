@@ -232,6 +232,7 @@ export default function ChartPanel({
         rightPriceScale: {
           borderColor: '#1e222a',
           mode: lcScaleMode,
+          minimumWidth: 80,
           scaleMargins: {
             top: 0.08,
             bottom: 0.22,
@@ -244,7 +245,32 @@ export default function ChartPanel({
       chartRef.current = chart;
       indicatorSeriesRef.current.clear();
 
-      // Synchronize visible Time Range (Pan / Zoom / Scroll) across panels and monitors
+      // Continuous Logical Range 60fps pan/zoom sync
+      const onSyncLogicalRangeChange = (logicalRange: any) => {
+        if (!logicalRange || isSyncingRangeRef.current) return;
+        if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
+          chartSyncService.broadcastLogicalRange(panelInstanceId, {
+            from: logicalRange.from,
+            to: logicalRange.to,
+          });
+        }
+      };
+      chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncLogicalRangeChange);
+
+      const unsubLogicalSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+        if (!chartRef.current) return;
+        isSyncingRangeRef.current = true;
+        try {
+          chartRef.current.timeScale().setVisibleLogicalRange(range);
+        } catch {
+          // Ignore if out of bounds
+        }
+        requestAnimationFrame(() => {
+          isSyncingRangeRef.current = false;
+        });
+      });
+
+      // Synchronize visible Time Range (Fallback across intervals / symbols)
       const onSyncTimeRangeChange = (timeRange: any) => {
         if (!timeRange || isSyncingRangeRef.current) return;
         if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
@@ -256,7 +282,7 @@ export default function ChartPanel({
       };
       chart.timeScale().subscribeVisibleTimeRangeChange(onSyncTimeRangeChange);
 
-      // Listen for incoming time range changes from CVD or other charts
+      // Listen for incoming time range changes
       const unsubTimeRangeSync = chartSyncService.subscribeTimeRange(panelInstanceId, (timeRange) => {
         if (!chartRef.current) return;
         isSyncingRangeRef.current = true;
@@ -265,9 +291,9 @@ export default function ChartPanel({
         } catch {
           // Ignore if out of bounds
         }
-        setTimeout(() => {
+        requestAnimationFrame(() => {
           isSyncingRangeRef.current = false;
-        }, 50);
+        });
       });
 
       // Synchronize Crosshair move
@@ -606,8 +632,9 @@ export default function ChartPanel({
       ro.observe(chartContainerRef.current);
 
       return () => {
-        chart.timeScale().unsubscribeVisibleLogicalRangeChange(onRangeChange);
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(onSyncLogicalRangeChange);
         chart.timeScale().unsubscribeVisibleTimeRangeChange(onSyncTimeRangeChange);
+        unsubLogicalSync();
         unsubTimeRangeSync();
         unsubCrosshairSync();
         chartSyncService.clearCrosshair(panelInstanceId);

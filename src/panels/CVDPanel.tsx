@@ -18,6 +18,7 @@ import {
   ChevronDown,
   Maximize2,
   Minimize2,
+  Activity,
 } from 'lucide-react';
 import { useTerminal } from '../context/TerminalContext';
 import { chartSyncService } from '../services/chartSyncService';
@@ -368,6 +369,7 @@ export default function CVDPanel({
       },
       rightPriceScale: {
         borderColor: 'rgba(255, 255, 255, 0.1)',
+        minimumWidth: 80,
         scaleMargins: { top: 0.08, bottom: 0.28 },
       },
       timeScale: {
@@ -379,7 +381,30 @@ export default function CVDPanel({
 
     chartRef.current = chart;
 
-    // Synchronize visible Time Range (Pan / Zoom / Scroll) across panels and monitors
+    // Continuous Logical Range 60fps pan/zoom sync
+    const onSyncLogicalRange = (logicalRange: any) => {
+      if (!logicalRange || isSyncingRangeRef.current) return;
+      if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
+        chartSyncService.broadcastLogicalRange(panelInstanceId, {
+          from: logicalRange.from,
+          to: logicalRange.to,
+        });
+      }
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncLogicalRange);
+
+    const unsubLogicalSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+      if (!chartRef.current) return;
+      isSyncingRangeRef.current = true;
+      try {
+        chartRef.current.timeScale().setVisibleLogicalRange(range);
+      } catch {}
+      requestAnimationFrame(() => {
+        isSyncingRangeRef.current = false;
+      });
+    });
+
+    // Synchronize visible Time Range (Fallback across intervals / symbols)
     const onRangeChange = (timeRange: any) => {
       if (!timeRange || isSyncingRangeRef.current) return;
       if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
@@ -400,9 +425,9 @@ export default function CVDPanel({
       } catch {
         // Safe ignore
       }
-      setTimeout(() => {
+      requestAnimationFrame(() => {
         isSyncingRangeRef.current = false;
-      }, 50);
+      });
     });
 
     // Synchronize Crosshair move
@@ -534,7 +559,9 @@ export default function CVDPanel({
     return () => {
       window.removeEventListener('resize', handleResize);
       resizeObserver.disconnect();
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(onSyncLogicalRange);
       chart.timeScale().unsubscribeVisibleTimeRangeChange(onRangeChange);
+      unsubLogicalSync();
       unsubRangeSync();
       unsubCrosshairSync();
       chartSyncService.clearCrosshair(panelInstanceId);
@@ -973,48 +1000,65 @@ export default function CVDPanel({
         </div>
       </div>
 
-      {/* Main Lightweight Chart Canvas */}
-      <div className="flex-grow w-full h-full relative overflow-hidden">
-        <div
-          ref={chartContainerRef}
-          className="absolute inset-0 w-full h-full"
-          onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId)}
-        />
-
-        {/* Mirrored Crosshair from Main Chart / Secondary Monitor */}
-        {mirroredCrosshairX !== null && (
-          <div
-            className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col justify-between"
-            style={{ left: `${mirroredCrosshairX}px` }}
+      {/* Main Lightweight Chart Canvas with 32px Left Strip matching ChartPanel */}
+      <div className="flex-grow flex relative overflow-hidden">
+        {/* Left Toolbar Spacer matching Main Chart (32px) */}
+        <div className="w-8 border-r border-border/50 bg-[#090b0e] flex flex-col items-center py-2 space-y-2 select-none z-20 shrink-0">
+          <button
+            type="button"
+            onClick={() => setChartStyle(chartStyle === 'CANDLES' ? 'LINE' : 'CANDLES')}
+            className={`p-1.5 rounded transition-colors ${
+              chartStyle === 'CANDLES' ? 'bg-[#00c087]/20 text-[#00c087]' : 'hover:bg-surface text-muted hover:text-text'
+            }`}
+            title={`Toggle CVD Style (Current: ${chartStyle})`}
           >
-            <div className="w-[1px] h-full border-l border-dashed border-[#00d2ff]" />
-            {mirroredTime && (
-              <div className="absolute bottom-6 -translate-x-1/2 bg-[#00d2ff] text-black text-[9px] font-bold px-1 rounded shadow pointer-events-none whitespace-nowrap">
-                {new Date(mirroredTime * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-              </div>
-            )}
-          </div>
-        )}
+            <Activity size={13} />
+          </button>
+        </div>
 
-        {/* Chart Legend Overlay */}
-        <div className="absolute top-2 left-3 pointer-events-none flex items-center space-x-3 text-[10px] bg-black/60 px-2 py-1 rounded backdrop-blur-sm border border-white/5">
-          {chartStyle === 'CANDLES' ? (
-            <span className="flex items-center gap-1 text-[#00c087] font-bold">
-              <span className="w-2 h-2 rounded-xs bg-[#00c087]" /> CVD CANDLES ({marketMode})
-            </span>
-          ) : (
-            <span className="flex items-center gap-1 text-[#00d2ff] font-bold">
-              <span className="w-2 h-0.5 bg-[#00d2ff]" /> CVD LINE ({marketMode})
-            </span>
+        {/* Chart Viewport */}
+        <div className="flex-grow relative h-full w-full overflow-hidden">
+          <div
+            ref={chartContainerRef}
+            className="w-full h-full"
+            onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId)}
+          />
+
+          {/* Mirrored Crosshair from Main Chart / Secondary Monitor */}
+          {mirroredCrosshairX !== null && (
+            <div
+              className="absolute top-0 bottom-0 pointer-events-none z-30 flex flex-col justify-between"
+              style={{ left: `${mirroredCrosshairX}px` }}
+            >
+              <div className="w-[1px] h-full border-l border-dashed border-[#00d2ff]" />
+              {mirroredTime && (
+                <div className="absolute bottom-6 -translate-x-1/2 bg-[#00d2ff] text-black text-[9px] font-bold px-1 rounded shadow pointer-events-none whitespace-nowrap">
+                  {new Date(mirroredTime * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </div>
+              )}
+            </div>
           )}
-          {chartStyle === 'CANDLES' && marketMode === 'DUAL' && (
-            <span className="flex items-center gap-1 text-[#f59e0b] font-bold">
-              <span className="w-2 h-0.5 bg-[#f59e0b]" /> FUTURES OVERLAY
+
+          {/* Chart Legend Overlay */}
+          <div className="absolute top-2 left-3 pointer-events-none flex items-center space-x-3 text-[10px] bg-black/60 px-2 py-1 rounded backdrop-blur-sm border border-white/5">
+            {chartStyle === 'CANDLES' ? (
+              <span className="flex items-center gap-1 text-[#00c087] font-bold">
+                <span className="w-2 h-2 rounded-xs bg-[#00c087]" /> CVD CANDLES ({marketMode})
+              </span>
+            ) : (
+              <span className="flex items-center gap-1 text-[#00d2ff] font-bold">
+                <span className="w-2 h-0.5 bg-[#00d2ff]" /> CVD LINE ({marketMode})
+              </span>
+            )}
+            {chartStyle === 'CANDLES' && marketMode === 'DUAL' && (
+              <span className="flex items-center gap-1 text-[#f59e0b] font-bold">
+                <span className="w-2 h-0.5 bg-[#f59e0b]" /> FUTURES OVERLAY
+              </span>
+            )}
+            <span className="flex items-center gap-1 text-muted">
+              <span className="w-1.5 h-1.5 rounded-sm bg-[#00c087]" /> DELTA BARS
             </span>
-          )}
-          <span className="flex items-center gap-1 text-muted">
-            <span className="w-1.5 h-1.5 rounded-sm bg-[#00c087]" /> DELTA BARS
-          </span>
+          </div>
         </div>
       </div>
     </div>

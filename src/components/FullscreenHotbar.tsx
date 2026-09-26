@@ -21,6 +21,7 @@ const HOTBAR_SYMBOLS = [
 const HOTBAR_DESKS = [
   { id: 'desk_trading', name: 'TRADING' },
   { id: 'desk_cvd', name: 'CVD & ORDER FLOW' },
+  { id: 'desk_indicators', name: 'QUANT & INDICATORS' },
   { id: 'desk_research', name: 'RESEARCH' },
   { id: 'desk_macro', name: 'MACRO' },
 ];
