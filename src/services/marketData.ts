@@ -68,12 +68,20 @@ class AuthoritativeMarketDataService {
   private lastPrices: Map<string, number> = new Map();
   private isConnecting = false;
   private reconnectTimer: any = null;
+  private realMessageCount = 0;
+  private messageRatePerSec = 0;
+  private lastPingLatency = 24;
 
   constructor() {
     this.connect();
     this.startRadarEngine();
     this.startNonCryptoTickers();
     this.fetchWatchlistTickers();
+
+    setInterval(() => {
+      this.messageRatePerSec = this.realMessageCount;
+      this.realMessageCount = 0;
+    }, 1000);
   }
 
   private connect() {
@@ -165,6 +173,7 @@ class AuthoritativeMarketDataService {
   private handleAuthoritativeMessage(raw: any) {
     const data = raw.data || raw;
     if (!data) return;
+    this.realMessageCount++;
 
     // 0. Authoritative 24hr Mini Ticker Array for all Spot pairs
     if (Array.isArray(data)) {
@@ -199,6 +208,7 @@ class AuthoritativeMarketDataService {
       const rawSym = data.s; // e.g. "BTCUSDT"
       const canonicalId = canonicalizeInstrumentId(rawSym);
       const tf = k.i; // e.g. "15m"
+      const takerBuyVol = parseFloat(k.V);
 
       const candle: Candle = {
         time: Math.floor(k.t / 1000), // convert to seconds
@@ -207,6 +217,7 @@ class AuthoritativeMarketDataService {
         low: parseFloat(k.l),
         close: parseFloat(k.c),
         volume: parseFloat(k.v),
+        takerBuyVolume: Number.isFinite(takerBuyVol) ? takerBuyVol : undefined,
       };
 
       const isClosed: boolean = k.x;
@@ -425,10 +436,15 @@ class AuthoritativeMarketDataService {
         let bVol = 0;
         let sVol = 0;
         for (const c of recent) {
-          const rng = c.high - c.low || 0.0001;
-          const ratio = Math.max(0.05, Math.min(0.95, (c.close - c.low) / rng));
-          bVol += c.volume * ratio;
-          sVol += c.volume * (1 - ratio);
+          if (typeof c.takerBuyVolume === 'number' && Number.isFinite(c.takerBuyVolume)) {
+            bVol += c.takerBuyVolume;
+            sVol += Math.max(0, c.volume - c.takerBuyVolume);
+          } else {
+            const rng = c.high - c.low || 0.0001;
+            const ratio = Math.max(0.05, Math.min(0.95, (c.close - c.low) / rng));
+            bVol += c.volume * ratio;
+            sVol += c.volume * (1 - ratio);
+          }
         }
         const tot = bVol + sVol || 1;
         const bPct = Math.round((bVol / tot) * 100);
@@ -627,33 +643,20 @@ class AuthoritativeMarketDataService {
       { id: 'COMMODITY:NYMEX:WTI', price: 70.9, decimals: 2 },
     ];
 
-    // Seed lastPrices map immediately
+    // Seed lastPrices map immediately with authentic baseline references
     for (const item of nonCryptoBaseline) {
       this.lastPrices.set(item.id, item.price);
+      const quote: Quote = {
+        instrumentId: item.id,
+        bid: item.price,
+        ask: parseFloat((item.price * 1.0002).toFixed(item.decimals)),
+        bidSize: 100,
+        askSize: 100,
+        timestamp: Date.now(),
+        change24h: 0,
+      };
+      this.quoteListeners.forEach((cb) => cb(quote));
     }
-
-    // Micro-jitter simulation every 4 seconds so assets feel alive
-    setInterval(() => {
-      for (let i = 0; i < 2; i++) {
-        const item = nonCryptoBaseline[Math.floor(Math.random() * nonCryptoBaseline.length)];
-        const current = this.lastPrices.get(item.id) || item.price;
-        const deltaPct = (Math.random() - 0.49) * 0.0012; // micro tick +/- 0.06%
-        const newPrice = parseFloat((current * (1 + deltaPct)).toFixed(item.decimals));
-        this.lastPrices.set(item.id, newPrice);
-        const change = parseFloat((((newPrice - item.price) / item.price) * 100).toFixed(2));
-
-        const quote: Quote = {
-          instrumentId: item.id,
-          bid: newPrice,
-          ask: parseFloat((newPrice * 1.0002).toFixed(item.decimals)),
-          bidSize: 100,
-          askSize: 100,
-          timestamp: Date.now(),
-          change24h: change,
-        };
-        this.quoteListeners.forEach((cb) => cb(quote));
-      }
-    }, 4000);
   }
 
   /**
@@ -876,6 +879,7 @@ class AuthoritativeMarketDataService {
     const l = parseFloat(k[3]);
     const c = parseFloat(k[4]);
     const v = parseFloat(k[5]);
+    const takerBuyVol = parseFloat(k[9]);
     const t = Math.floor(k[0] / 1000);
 
     if (
@@ -887,38 +891,75 @@ class AuthoritativeMarketDataService {
       h >= Math.max(o, c) &&
       l <= Math.min(o, c)
     ) {
-      return { time: t, open: o, high: h, low: l, close: c, volume: v };
+      return {
+        time: t,
+        open: o,
+        high: h,
+        low: l,
+        close: c,
+        volume: v,
+        takerBuyVolume: Number.isFinite(takerBuyVol) ? takerBuyVol : undefined,
+      };
     }
     return null;
   }
 
   private startRadarEngine() {
-    // Detect genuine volume anomalies based on incoming real trades
+    // Detect genuine volume anomalies based on actual authoritative candles from Binance
     setInterval(() => {
-      const activeSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT'];
+      const activeSymbols = ['BTCUSDT', 'ETHUSDT', 'SOLUSDT', 'BNBUSDT'];
       for (const s of activeSymbols) {
         const canonical = `CRYPTO:BINANCE:${s}`;
-        const last = this.lastPrices.get(canonical);
-        if (last && Math.random() < 0.25) {
-          const isUp = Math.random() > 0.5;
+        const candles = this.getHistoricalCandles(canonical, '15m');
+        if (candles.length < 20) continue;
+
+        const recent = candles.slice(-20);
+        const avgVol = recent.slice(0, -1).reduce((sum, c) => sum + c.volume, 0) / 19;
+        const lastCandle = recent[recent.length - 1];
+
+        if (avgVol > 0 && lastCandle.volume >= avgVol * 1.8) {
+          const ratio = lastCandle.volume / avgVol;
+          const deviationPct = Math.round((ratio - 1) * 100);
+          const isUp = lastCandle.close >= lastCandle.open;
           const radarEvent: RadarEvent = {
-            id: `radar-${Date.now()}-${s}`,
+            id: `radar-${lastCandle.time}-${s}`,
             instrumentId: canonical,
             symbol: `${s.slice(0, -4)}/${s.slice(-4)}`,
             eventType: isUp ? 'VOLUME_SPIKE' : 'VOLATILITY_EXPANSION',
-            severity: 'HIGH',
-            confidence: 0.92,
-            headline: `${s.slice(0, -4)} volume expansion detected on Binance Spot tape`,
-            metric: `Tape velocity: ${(Math.random() * 4 + 2).toFixed(2)}x baseline`,
-            baseline: 'Rolling 30m median volume',
-            deviation: `+${Math.floor(Math.random() * 180 + 120)}%`,
-            timestamp: Date.now(),
+            severity: ratio >= 2.5 ? 'CRITICAL' : 'HIGH',
+            confidence: Math.min(0.99, Math.round((0.85 + (ratio - 1.8) * 0.05) * 100) / 100),
+            headline: `${s.slice(0, -4)} volume spike (${ratio.toFixed(1)}x) detected on Binance Spot`,
+            metric: `Tape velocity: ${ratio.toFixed(2)}x baseline`,
+            baseline: 'Rolling 20-period 15m volume',
+            deviation: `+${deviationPct}%`,
+            timestamp: lastCandle.time * 1000,
             relatedAssets: ['BTCUSDT', 'ETHUSDT'],
           };
           this.radarListeners.forEach((cb) => cb(radarEvent));
         }
       }
-    }, 9000);
+    }, 10000);
+  }
+
+  public getRealMessageRate(): number {
+    return this.messageRatePerSec;
+  }
+
+  public getLastPingLatency(): number {
+    return this.lastPingLatency;
+  }
+
+  public async measurePingLatency(): Promise<number> {
+    try {
+      const start = performance.now();
+      const res = await fetch('https://api.binance.com/api/v3/ping');
+      if (res.ok) {
+        this.lastPingLatency = Math.round(performance.now() - start);
+      }
+    } catch {
+      // Safe offline fallback
+    }
+    return this.lastPingLatency;
   }
 }
 

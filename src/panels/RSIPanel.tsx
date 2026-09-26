@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
+import { marketMirror } from '../services/marketMirror';
+import { canonicalizeInstrumentId } from '../services/instruments';
 import { calculateRSI } from '../utils/indicators';
 import PanelHeader from './PanelHeader';
 import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
-import { Activity, Zap } from 'lucide-react';
+import { Activity, Zap, Loader2 } from 'lucide-react';
 
 interface RSIPanelProps {
   defaultGroup?: LinkGroup;
@@ -14,7 +16,7 @@ interface RSIPanelProps {
 interface TimeframeRSI {
   tf: string;
   rsi: number;
-  status: 'OVERBOUGHT' | 'OVERSOLD' | 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  status: 'OVERBOUGHT' | 'OVERSOLD' | 'BULLISH' | 'BEARISH' | 'NEUTRAL' | 'MEMUAT';
   color: string;
 }
 
@@ -26,25 +28,76 @@ export default function RSIPanel({ defaultGroup = 'BLUE' }: RSIPanelProps) {
   const [candles1h, setCandles1h] = useState<Candle[]>([]);
   const [candles4h, setCandles4h] = useState<Candle[]>([]);
   const [candles1D, setCandles1D] = useState<Candle[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const symbol = activeInstrument?.symbol || 'BTCUSDT';
   const displaySymbol = symbol.replace('USDT', '/USDT');
 
-  // Load candles across multiple timeframes for the active coin
+  // Load candles across multiple timeframes for the active coin with authoritative exchange fetching
   useEffect(() => {
     if (!activeInstrument) return;
+    let isMounted = true;
+    setIsLoading(true);
 
-    setCandles15m(marketData.getHistoricalCandles(activeInstrument.id, '15m'));
-    setCandles1h(marketData.getHistoricalCandles(activeInstrument.id, '1h'));
-    setCandles4h(marketData.getHistoricalCandles(activeInstrument.id, '4h'));
-    setCandles1D(marketData.getHistoricalCandles(activeInstrument.id, '1D'));
+    const initial15m = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+    const initial1h = marketData.getHistoricalCandles(activeInstrument.id, '1h');
+    const initial4h = marketData.getHistoricalCandles(activeInstrument.id, '4h');
+    const initial1D = marketData.getHistoricalCandles(activeInstrument.id, '1D');
+
+    if (initial15m.length > 0) {
+      setCandles15m(initial15m);
+      setIsLoading(false);
+    }
+    if (initial1h.length > 0) setCandles1h(initial1h);
+    if (initial4h.length > 0) setCandles4h(initial4h);
+    if (initial1D.length > 0) setCandles1D(initial1D);
+
+    // Fetch authoritative historical candles for all timeframes
+    Promise.all([
+      marketData.fetchAuthoritativeHistory(activeInstrument.id, '15m'),
+      marketData.fetchAuthoritativeHistory(activeInstrument.id, '1h'),
+      marketData.fetchAuthoritativeHistory(activeInstrument.id, '4h'),
+      marketData.fetchAuthoritativeHistory(activeInstrument.id, '1D'),
+    ])
+      .then(() => {
+        if (!isMounted) return;
+        const fresh15m = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+        const fresh1h = marketData.getHistoricalCandles(activeInstrument.id, '1h');
+        const fresh4h = marketData.getHistoricalCandles(activeInstrument.id, '4h');
+        const fresh1D = marketData.getHistoricalCandles(activeInstrument.id, '1D');
+        if (fresh15m.length > 0) setCandles15m(fresh15m);
+        if (fresh1h.length > 0) setCandles1h(fresh1h);
+        if (fresh4h.length > 0) setCandles4h(fresh4h);
+        if (fresh1D.length > 0) setCandles1D(fresh1D);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    // Subscribe to Stale-While-Revalidate mirror cache across timeframes
+    const canonical = canonicalizeInstrumentId(activeInstrument.id);
+    const unsubMirror = marketMirror.subscribeCandles((instId, tf, freshCandles) => {
+      if (!isMounted) return;
+      if (canonicalizeInstrumentId(instId) === canonical) {
+        if (tf === '15m' && freshCandles.length > 0) {
+          setCandles15m(freshCandles);
+          setIsLoading(false);
+        }
+        if (tf === '1h' && freshCandles.length > 0) setCandles1h(freshCandles);
+        if (tf === '4h' && freshCandles.length > 0) setCandles4h(freshCandles);
+        if (tf === '1D' && freshCandles.length > 0) setCandles1D(freshCandles);
+      }
+    });
 
     const gen = Date.now();
-    const unsub = marketData.subscribeAuthoritativeCandles(
+    const unsubCandles = marketData.subscribeAuthoritativeCandles(
       activeInstrument.id,
       '15m',
       gen,
       (candle) => {
+        if (!isMounted) return;
+        setIsLoading(false);
         setCandles15m((prev) => {
           if (prev.length === 0) return [candle];
           const last = prev[prev.length - 1];
@@ -56,15 +109,19 @@ export default function RSIPanel({ defaultGroup = 'BLUE' }: RSIPanelProps) {
       }
     );
 
-    return () => unsub();
-  }, [activeInstrument.id]);
+    return () => {
+      isMounted = false;
+      unsubMirror();
+      unsubCandles();
+    };
+  }, [activeInstrument?.id]);
 
-  // Compute RSI for each timeframe
+  // Compute RSI for each timeframe strictly from real candles
   const rsiMatrix: TimeframeRSI[] = useMemo(() => {
     const computeVal = (list: Candle[]): number => {
-      if (list.length <= 14) return 50;
+      if (list.length <= 14) return -1;
       const pts = calculateRSI(list, 14);
-      return pts.length > 0 ? Math.round(pts[pts.length - 1].value * 10) / 10 : 50;
+      return pts.length > 0 ? Math.round(pts[pts.length - 1].value * 10) / 10 : -1;
     };
 
     const tfs = [
@@ -79,7 +136,10 @@ export default function RSIPanel({ defaultGroup = 'BLUE' }: RSIPanelProps) {
       let status: TimeframeRSI['status'] = 'NEUTRAL';
       let color = '#848e9c';
 
-      if (val >= 70) {
+      if (val < 0) {
+        status = 'MEMUAT';
+        color = '#848e9c';
+      } else if (val >= 70) {
         status = 'OVERBOUGHT';
         color = '#f6465d';
       } else if (val <= 30) {
@@ -97,7 +157,7 @@ export default function RSIPanel({ defaultGroup = 'BLUE' }: RSIPanelProps) {
     });
   }, [candles15m, candles1h, candles4h, candles1D]);
 
-  const activeRSI = rsiMatrix[0]?.rsi || 50;
+  const activeRSI = rsiMatrix[0]?.rsi ?? -1;
 
   // Divergence Detection
   const divergenceInfo = useMemo(() => {
@@ -156,151 +216,163 @@ export default function RSIPanel({ defaultGroup = 'BLUE' }: RSIPanelProps) {
         }
       />
 
-      <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
-        {/* Dynamic Coin Explanation Banner */}
-        <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-xs font-bold text-white tracking-wider">{displaySymbol}</span>
-              <span
-                className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded ${
-                  activeRSI >= 70
-                    ? 'bg-[#f6465d]/20 text-[#f6465d]'
-                    : activeRSI <= 30
-                    ? 'bg-[#00c087]/20 text-[#00c087]'
-                    : 'bg-accent/20 text-accent'
-                }`}
-              >
-                RSI 15M: {activeRSI.toFixed(1)}
-              </span>
-            </div>
-            <p className="text-[10px] text-muted mt-0.5">
-              Analisis kekuatan tren dan osilasi momentum multi-timeframe untuk instrumen{' '}
-              <span className="text-text font-bold">{displaySymbol}</span>.
-            </p>
-          </div>
-          <div className="text-right">
-            <div className="text-[9px] text-muted uppercase">Status Intraday</div>
-            <div
-              className="text-xs font-extrabold tracking-wider"
-              style={{ color: rsiMatrix[0]?.color || '#848e9c' }}
-            >
-              {rsiMatrix[0]?.status || 'NEUTRAL'}
-            </div>
+      {isLoading && candles15m.length === 0 ? (
+        <div className="flex-grow flex flex-col items-center justify-center p-6 text-center space-y-3">
+          <Loader2 size={24} className="text-accent animate-spin" />
+          <div className="text-xs text-white font-bold">Memuat Indikator Momentum RSI [{displaySymbol}]</div>
+          <div className="text-[11px] text-muted max-w-xs">
+            Mengunduh lilin bursa Binance untuk menghitung indikator RSI multi-timeframe secara akurat...
           </div>
         </div>
-
-        {/* Multi-Timeframe Matrix Cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-          {rsiMatrix.map((item) => (
-            <div
-              key={item.tf}
-              className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex flex-col items-center justify-between shadow-sm"
-            >
-              <div className="w-full flex items-center justify-between text-[10px] mb-1">
-                <span className="font-bold text-white text-xs">{item.tf}</span>
+      ) : (
+        <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
+          {/* Dynamic Coin Explanation Banner */}
+          <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-xs font-bold text-white tracking-wider">{displaySymbol}</span>
                 <span
-                  className="text-[9px] font-bold px-1 rounded uppercase"
-                  style={{ backgroundColor: `${item.color}20`, color: item.color }}
+                  className={`text-[10px] font-extrabold px-1.5 py-0.2 rounded ${
+                    activeRSI < 0
+                      ? 'bg-surface text-muted'
+                      : activeRSI >= 70
+                      ? 'bg-[#f6465d]/20 text-[#f6465d]'
+                      : activeRSI <= 30
+                      ? 'bg-[#00c087]/20 text-[#00c087]'
+                      : 'bg-accent/20 text-accent'
+                  }`}
                 >
-                  {item.status}
+                  RSI 15M: {activeRSI < 0 ? 'MEMUAT...' : activeRSI.toFixed(1)}
                 </span>
               </div>
-
-              {/* Numerical Value */}
-              <div className="text-xl font-black my-1" style={{ color: item.color }}>
-                {item.rsi.toFixed(1)}
-              </div>
-
-              {/* Mini Horizontal Bar Indicator */}
-              <div className="w-full bg-[#12151c] h-1.5 rounded-full overflow-hidden border border-border/40 mt-1">
-                <div
-                  className="h-full transition-all duration-500 rounded-full"
-                  style={{
-                    width: `${item.rsi}%`,
-                    backgroundColor: item.color,
-                  }}
-                />
-              </div>
+              <p className="text-[10px] text-muted mt-0.5">
+                Analisis kekuatan tren dan osilasi momentum multi-timeframe untuk instrumen{' '}
+                <span className="text-text font-bold">{displaySymbol}</span>.
+              </p>
             </div>
-          ))}
-        </div>
-
-        {/* Master Gauge View (0 to 100) */}
-        <div className="bg-[#0b0d13] border border-border/60 rounded-md p-3 flex flex-col space-y-2">
-          <div className="flex items-center justify-between text-[10px]">
-            <span className="text-muted font-bold flex items-center gap-1">
-              <Activity size={11} className="text-accent" />
-              RSI SPECTRUM & OVERBOUGHT / OVERSOLD THRESHOLDS
-            </span>
-            <span className="text-[9px] text-muted">Batas Standar: 30 / 70</span>
-          </div>
-
-          <div className="relative w-full h-8 bg-[#12151c] rounded border border-border/40 overflow-hidden flex items-center px-2">
-            {/* Zones */}
-            <div className="absolute inset-0 flex pointer-events-none text-[8px] font-mono font-bold">
-              <div className="w-[30%] bg-[#00c087]/20 border-r border-[#00c087]/40 flex items-center justify-center text-[#00c087]">
-                OVERSOLD (&lt;30)
-              </div>
-              <div className="w-[40%] bg-white/5 border-r border-border/40 flex items-center justify-center text-muted">
-                EQUILIBRIUM (30 - 70)
-              </div>
-              <div className="w-[30%] bg-[#f6465d]/20 flex items-center justify-center text-[#f6465d]">
-                OVERBOUGHT (&gt;70)
-              </div>
-            </div>
-
-            {/* Current RSI Cursor Pointer */}
-            <div
-              className="absolute top-1 bottom-1 w-2.5 rounded-full z-20 -translate-x-1/2 shadow-lg transition-all duration-300"
-              style={{
-                left: `${Math.max(2, Math.min(98, activeRSI))}%`,
-                backgroundColor: activeRSI >= 70 ? '#f6465d' : activeRSI <= 30 ? '#00c087' : '#38bdf8',
-                boxShadow: `0 0 10px ${activeRSI >= 70 ? '#f6465d' : activeRSI <= 30 ? '#00c087' : '#38bdf8'}`,
-              }}
-            />
-          </div>
-
-          <div className="flex justify-between text-[9px] text-muted font-mono px-1">
-            <span className="text-[#00c087] font-bold">0 (Ekstrim Jual)</span>
-            <span>30 (Oversold)</span>
-            <span className="text-white font-bold">50 (Center)</span>
-            <span>70 (Overbought)</span>
-            <span className="text-[#f6465d] font-bold">100 (Ekstrim Beli)</span>
-          </div>
-        </div>
-
-        {/* Divergence Detection Summary Card */}
-        <div className="bg-[#0b0d13] border border-border/50 rounded-md p-2.5 flex items-start space-x-2 text-[10px] text-muted">
-          <Zap
-            size={14}
-            className={`shrink-0 mt-0.5 ${
-              divergenceInfo.type === 'BULLISH'
-                ? 'text-[#00c087]'
-                : divergenceInfo.type === 'BEARISH'
-                ? 'text-[#f6465d]'
-                : 'text-accent'
-            }`}
-          />
-          <div>
-            <div className="flex items-center space-x-2">
-              <span className="text-white font-bold">Deteksi Divergensi {displaySymbol}:</span>
-              <span
-                className={`font-black text-[9px] px-1.5 py-0.2 rounded uppercase ${
-                  divergenceInfo.type === 'BULLISH'
-                    ? 'bg-[#00c087]/20 text-[#00c087]'
-                    : divergenceInfo.type === 'BEARISH'
-                    ? 'bg-[#f6465d]/20 text-[#f6465d]'
-                    : 'bg-white/10 text-muted'
-                }`}
+            <div className="text-right">
+              <div className="text-[9px] text-muted uppercase">Status Intraday</div>
+              <div
+                className="text-xs font-extrabold tracking-wider"
+                style={{ color: rsiMatrix[0]?.color || '#848e9c' }}
               >
-                {divergenceInfo.label}
-              </span>
+                {rsiMatrix[0]?.status || 'NEUTRAL'}
+              </div>
             </div>
-            <p className="text-[10px] text-muted mt-0.5">{divergenceInfo.description}</p>
+          </div>
+
+          {/* Multi-Timeframe Matrix Cards */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+            {rsiMatrix.map((item) => (
+              <div
+                key={item.tf}
+                className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex flex-col items-center justify-between shadow-sm"
+              >
+                <div className="w-full flex items-center justify-between text-[10px] mb-1">
+                  <span className="font-bold text-white text-xs">{item.tf}</span>
+                  <span
+                    className="text-[9px] font-bold px-1 rounded uppercase"
+                    style={{ backgroundColor: `${item.color}20`, color: item.color }}
+                  >
+                    {item.status}
+                  </span>
+                </div>
+
+                {/* Numerical Value */}
+                <div className="text-xl font-black my-1" style={{ color: item.color }}>
+                  {item.rsi < 0 ? '--' : item.rsi.toFixed(1)}
+                </div>
+
+                {/* Mini Horizontal Bar Indicator */}
+                <div className="w-full bg-[#12151c] h-1.5 rounded-full overflow-hidden border border-border/40 mt-1">
+                  <div
+                    className="h-full transition-all duration-500 rounded-full"
+                    style={{
+                      width: `${item.rsi < 0 ? 0 : item.rsi}%`,
+                      backgroundColor: item.color,
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Master Gauge View (0 to 100) */}
+          <div className="bg-[#0b0d13] border border-border/60 rounded-md p-3 flex flex-col space-y-2">
+            <div className="flex items-center justify-between text-[10px]">
+              <span className="text-muted font-bold flex items-center gap-1">
+                <Activity size={11} className="text-accent" />
+                RSI SPECTRUM & OVERBOUGHT / OVERSOLD THRESHOLDS
+              </span>
+              <span className="text-[9px] text-muted">Batas Standar: 30 / 70</span>
+            </div>
+
+            <div className="relative w-full h-8 bg-[#12151c] rounded border border-border/40 overflow-hidden flex items-center px-2">
+              {/* Zones */}
+              <div className="absolute inset-0 flex pointer-events-none text-[8px] font-mono font-bold">
+                <div className="w-[30%] bg-[#00c087]/20 border-r border-[#00c087]/40 flex items-center justify-center text-[#00c087]">
+                  OVERSOLD (&lt;30)
+                </div>
+                <div className="w-[40%] bg-white/5 border-r border-border/40 flex items-center justify-center text-muted">
+                  EQUILIBRIUM (30 - 70)
+                </div>
+                <div className="w-[30%] bg-[#f6465d]/20 flex items-center justify-center text-[#f6465d]">
+                  OVERBOUGHT (&gt;70)
+                </div>
+              </div>
+
+              {/* Current RSI Cursor Pointer */}
+              <div
+                className="absolute top-1 bottom-1 w-2.5 rounded-full z-20 -translate-x-1/2 shadow-lg transition-all duration-300"
+                style={{
+                  left: `${activeRSI < 0 ? 50 : Math.max(2, Math.min(98, activeRSI))}%`,
+                  backgroundColor: activeRSI >= 70 ? '#f6465d' : activeRSI <= 30 ? '#00c087' : '#38bdf8',
+                  boxShadow: `0 0 10px ${activeRSI >= 70 ? '#f6465d' : activeRSI <= 30 ? '#00c087' : '#38bdf8'}`,
+                }}
+              />
+            </div>
+
+            <div className="flex justify-between text-[9px] text-muted font-mono px-1">
+              <span className="text-[#00c087] font-bold">0 (Ekstrim Jual)</span>
+              <span>30 (Oversold)</span>
+              <span className="text-white font-bold">50 (Center)</span>
+              <span>70 (Overbought)</span>
+              <span className="text-[#f6465d] font-bold">100 (Ekstrim Beli)</span>
+            </div>
+          </div>
+
+          {/* Divergence Detection Summary Card */}
+          <div className="bg-[#0b0d13] border border-border/50 rounded-md p-2.5 flex items-start space-x-2 text-[10px] text-muted">
+            <Zap
+              size={14}
+              className={`shrink-0 mt-0.5 ${
+                divergenceInfo.type === 'BULLISH'
+                  ? 'text-[#00c087]'
+                  : divergenceInfo.type === 'BEARISH'
+                  ? 'text-[#f6465d]'
+                  : 'text-accent'
+              }`}
+            />
+            <div>
+              <div className="flex items-center space-x-2">
+                <span className="text-white font-bold">Deteksi Divergensi {displaySymbol}:</span>
+                <span
+                  className={`font-black text-[9px] px-1.5 py-0.2 rounded uppercase ${
+                    divergenceInfo.type === 'BULLISH'
+                      ? 'bg-[#00c087]/20 text-[#00c087]'
+                      : divergenceInfo.type === 'BEARISH'
+                      ? 'bg-[#f6465d]/20 text-[#f6465d]'
+                      : 'bg-white/10 text-muted'
+                  }`}
+                >
+                  {divergenceInfo.label}
+                </span>
+              </div>
+              <p className="text-[10px] text-muted mt-0.5">{divergenceInfo.description}</p>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

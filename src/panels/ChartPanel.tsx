@@ -262,23 +262,31 @@ export default function ChartPanel({
       });
 
       chartRef.current = chart;
-      indicatorSeriesRef.current.clear();
+    const currentInstrumentId = canonicalizeInstrumentId(activeInstrument.id);
 
-      // Continuous Logical Range 60fps pan/zoom sync
-      const onSyncLogicalRangeChange = (logicalRange: any) => {
-        if (!isSyncEnabledRef.current) return;
-        if (!logicalRange || isSyncingRangeRef.current) return;
-        if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
-          chartSyncService.broadcastLogicalRange(panelInstanceId, {
+    // Continuous Logical Range 60fps pan/zoom sync
+    const onSyncLogicalRangeChange = (logicalRange: any) => {
+      if (!isSyncEnabledRef.current) return;
+      if (!logicalRange || isSyncingRangeRef.current) return;
+      if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
+        chartSyncService.broadcastLogicalRange(
+          panelInstanceId,
+          {
             from: logicalRange.from,
             to: logicalRange.to,
-          });
-        }
-      };
-      chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncLogicalRangeChange);
+          },
+          currentInstrumentId
+        );
+      }
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncLogicalRangeChange);
 
-      const unsubLogicalSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
+    const unsubLogicalSync = chartSyncService.subscribeLogicalRange(
+      panelInstanceId,
+      (range, sourceInstrumentId) => {
         if (!isSyncEnabledRef.current) return;
+        // Strictly sync ONLY if both charts are showing the exact same coin!
+        if (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== currentInstrumentId) return;
         if (!chartRef.current) return;
         isSyncingRangeRef.current = true;
         try {
@@ -289,24 +297,33 @@ export default function ChartPanel({
         requestAnimationFrame(() => {
           isSyncingRangeRef.current = false;
         });
-      });
+      }
+    );
 
-      // Synchronize visible Time Range (Fallback across intervals / symbols)
-      const onSyncTimeRangeChange = (timeRange: any) => {
-        if (!isSyncEnabledRef.current) return;
-        if (!timeRange || isSyncingRangeRef.current) return;
-        if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
-          chartSyncService.broadcastTimeRange(panelInstanceId, {
+    // Synchronize visible Time Range (Fallback across intervals / symbols)
+    const onSyncTimeRangeChange = (timeRange: any) => {
+      if (!isSyncEnabledRef.current) return;
+      if (!timeRange || isSyncingRangeRef.current) return;
+      if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
+        chartSyncService.broadcastTimeRange(
+          panelInstanceId,
+          {
             from: timeRange.from,
             to: timeRange.to,
-          });
-        }
-      };
-      chart.timeScale().subscribeVisibleTimeRangeChange(onSyncTimeRangeChange);
+          },
+          currentInstrumentId
+        );
+      }
+    };
+    chart.timeScale().subscribeVisibleTimeRangeChange(onSyncTimeRangeChange);
 
-      // Listen for incoming time range changes
-      const unsubTimeRangeSync = chartSyncService.subscribeTimeRange(panelInstanceId, (timeRange) => {
+    // Listen for incoming time range changes
+    const unsubTimeRangeSync = chartSyncService.subscribeTimeRange(
+      panelInstanceId,
+      (timeRange, sourceInstrumentId) => {
         if (!isSyncEnabledRef.current) return;
+        // Strictly sync ONLY if both charts are showing the exact same coin!
+        if (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== currentInstrumentId) return;
         if (!chartRef.current) return;
         isSyncingRangeRef.current = true;
         try {
@@ -317,26 +334,36 @@ export default function ChartPanel({
         requestAnimationFrame(() => {
           isSyncingRangeRef.current = false;
         });
-      });
+      }
+    );
 
-      // Synchronize Crosshair move
-      chart.subscribeCrosshairMove((param) => {
-        if (!isSyncEnabledRef.current) {
-          chartSyncService.clearCrosshair(panelInstanceId);
-          return;
-        }
-        if (!param.point || !param.time) {
-          chartSyncService.clearCrosshair(panelInstanceId);
-          return;
-        }
-        chartSyncService.broadcastCrosshair(panelInstanceId, {
+    // Synchronize Crosshair move
+    chart.subscribeCrosshairMove((param) => {
+      if (!isSyncEnabledRef.current) {
+        chartSyncService.clearCrosshair(panelInstanceId, currentInstrumentId);
+        return;
+      }
+      if (!param.point || !param.time) {
+        chartSyncService.clearCrosshair(panelInstanceId, currentInstrumentId);
+        return;
+      }
+      chartSyncService.broadcastCrosshair(
+        panelInstanceId,
+        {
           time: param.time as number,
-        });
-      });
+        },
+        currentInstrumentId
+      );
+    });
 
-      // Listen for incoming mirrored crosshair moves
-      const unsubCrosshairSync = chartSyncService.subscribeCrosshair(panelInstanceId, (point) => {
-        if (!isSyncEnabledRef.current) {
+    // Listen for incoming mirrored crosshair moves
+    const unsubCrosshairSync = chartSyncService.subscribeCrosshair(
+      panelInstanceId,
+      (point, sourceInstrumentId) => {
+        if (
+          !isSyncEnabledRef.current ||
+          (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== currentInstrumentId)
+        ) {
           setMirroredCrosshairX(null);
           setMirroredTime(null);
           return;
@@ -363,7 +390,8 @@ export default function ChartPanel({
           setMirroredCrosshairX(null);
           setMirroredTime(null);
         }
-      });
+      }
+    );
 
       // Retrieve initial cached candles immediately (Stale-While-Revalidate)
       const rawCandles = marketData.getHistoricalCandles(activeInstrument.id, timeframe);
@@ -669,7 +697,7 @@ export default function ChartPanel({
         unsubLogicalSync();
         unsubTimeRangeSync();
         unsubCrosshairSync();
-        chartSyncService.clearCrosshair(panelInstanceId);
+        chartSyncService.clearCrosshair(panelInstanceId, currentInstrumentId);
         unsubTrades();
         unsubCandles();
         unsubMirror();
@@ -814,6 +842,34 @@ export default function ChartPanel({
                 {tf}
               </button>
             ))}
+
+            {/* Sync Toggle */}
+            <button
+              type="button"
+              onClick={() => setIsSyncEnabled((prev) => !prev)}
+              className={`px-1.5 py-0.5 rounded text-[10px] font-bold border transition-colors flex items-center space-x-1 cursor-pointer ${
+                isSyncEnabled
+                  ? 'bg-[#00c087]/15 text-[#00c087] border-[#00c087]/40 hover:bg-[#00c087]/25'
+                  : 'bg-yellow-500/15 text-yellow-400 border-yellow-500/40 hover:bg-yellow-500/25'
+              }`}
+              title={
+                isSyncEnabled
+                  ? 'Chart tersinkronisasi (hanya koin yang sama). Klik untuk beralih ke Mode Bebas / Independent.'
+                  : 'Chart independen / decoupled. Bebas menggeser dan zoom tanpa mempengaruhi chart lain. Klik untuk sinkron kembali.'
+              }
+            >
+              {isSyncEnabled ? (
+                <>
+                  <Link2 size={11} className="text-[#00c087]" />
+                  <span className="hidden sm:inline">SYNC</span>
+                </>
+              ) : (
+                <>
+                  <Unlink size={11} className="text-yellow-400" />
+                  <span className="hidden sm:inline">FREE</span>
+                </>
+              )}
+            </button>
 
             <div className="w-[1px] h-3 bg-border/40 mx-1" />
 

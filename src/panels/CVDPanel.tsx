@@ -24,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useTerminal } from '../context/TerminalContext';
 import { chartSyncService } from '../services/chartSyncService';
+import { canonicalizeInstrumentId } from '../services/instruments';
 import type { LinkGroup } from '../types';
 import PanelHeader from './PanelHeader';
 
@@ -86,6 +87,15 @@ export default function CVDPanel({
     }
     return manualSymbol.toUpperCase();
   }, [useLinkedSymbol, activeInstrument, manualSymbol]);
+
+  const activeCanonicalId = useMemo(() => {
+    return canonicalizeInstrumentId(activeSymbol);
+  }, [activeSymbol]);
+
+  const activeCanonicalIdRef = useRef(activeCanonicalId);
+  useEffect(() => {
+    activeCanonicalIdRef.current = activeCanonicalId;
+  }, [activeCanonicalId]);
 
   // Market Mode, Chart Style & Timeframe
   const [marketMode, setMarketMode] = useState<CvdMarketMode>('DUAL');
@@ -405,99 +415,127 @@ export default function CVDPanel({
       if (!isSyncEnabledRef.current) return;
       if (!logicalRange || isSyncingRangeRef.current) return;
       if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
-        chartSyncService.broadcastLogicalRange(panelInstanceId, {
-          from: logicalRange.from,
-          to: logicalRange.to,
-        });
+        chartSyncService.broadcastLogicalRange(
+          panelInstanceId,
+          {
+            from: logicalRange.from,
+            to: logicalRange.to,
+          },
+          activeCanonicalIdRef.current
+        );
       }
     };
     chart.timeScale().subscribeVisibleLogicalRangeChange(onSyncLogicalRange);
 
-    const unsubLogicalSync = chartSyncService.subscribeLogicalRange(panelInstanceId, (range) => {
-      if (!isSyncEnabledRef.current) return;
-      if (!chartRef.current) return;
-      isSyncingRangeRef.current = true;
-      try {
-        chartRef.current.timeScale().setVisibleLogicalRange(range);
-      } catch {}
-      requestAnimationFrame(() => {
-        isSyncingRangeRef.current = false;
-      });
-    });
+    const unsubLogicalSync = chartSyncService.subscribeLogicalRange(
+      panelInstanceId,
+      (range, sourceInstrumentId) => {
+        if (!isSyncEnabledRef.current) return;
+        // Strictly sync ONLY if both charts are showing the exact same coin!
+        if (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== activeCanonicalIdRef.current) return;
+        if (!chartRef.current) return;
+        isSyncingRangeRef.current = true;
+        try {
+          chartRef.current.timeScale().setVisibleLogicalRange(range);
+        } catch {}
+        requestAnimationFrame(() => {
+          isSyncingRangeRef.current = false;
+        });
+      }
+    );
 
     // Synchronize visible Time Range (Fallback across intervals / symbols)
     const onRangeChange = (timeRange: any) => {
       if (!isSyncEnabledRef.current) return;
       if (!timeRange || isSyncingRangeRef.current) return;
       if (typeof timeRange.from === 'number' && typeof timeRange.to === 'number') {
-        chartSyncService.broadcastTimeRange(panelInstanceId, {
-          from: timeRange.from,
-          to: timeRange.to,
-        });
+        chartSyncService.broadcastTimeRange(
+          panelInstanceId,
+          {
+            from: timeRange.from,
+            to: timeRange.to,
+          },
+          activeCanonicalIdRef.current
+        );
       }
     };
     chart.timeScale().subscribeVisibleTimeRangeChange(onRangeChange);
 
     // Listen for incoming time range changes from normal chart or other panels
-    const unsubRangeSync = chartSyncService.subscribeTimeRange(panelInstanceId, (timeRange) => {
-      if (!isSyncEnabledRef.current) return;
-      if (!chartRef.current) return;
-      isSyncingRangeRef.current = true;
-      try {
-        chartRef.current.timeScale().setVisibleRange(timeRange as any);
-      } catch {
-        // Safe ignore
+    const unsubRangeSync = chartSyncService.subscribeTimeRange(
+      panelInstanceId,
+      (timeRange, sourceInstrumentId) => {
+        if (!isSyncEnabledRef.current) return;
+        // Strictly sync ONLY if both charts are showing the exact same coin!
+        if (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== activeCanonicalIdRef.current) return;
+        if (!chartRef.current) return;
+        isSyncingRangeRef.current = true;
+        try {
+          chartRef.current.timeScale().setVisibleRange(timeRange as any);
+        } catch {
+          // Safe ignore
+        }
+        requestAnimationFrame(() => {
+          isSyncingRangeRef.current = false;
+        });
       }
-      requestAnimationFrame(() => {
-        isSyncingRangeRef.current = false;
-      });
-    });
+    );
 
     // Synchronize Crosshair move
     chart.subscribeCrosshairMove((param) => {
       if (!isSyncEnabledRef.current) {
-        chartSyncService.clearCrosshair(panelInstanceId);
+        chartSyncService.clearCrosshair(panelInstanceId, activeCanonicalIdRef.current);
         return;
       }
       if (!param.point || !param.time) {
-        chartSyncService.clearCrosshair(panelInstanceId);
+        chartSyncService.clearCrosshair(panelInstanceId, activeCanonicalIdRef.current);
         return;
       }
-      chartSyncService.broadcastCrosshair(panelInstanceId, {
-        time: param.time as number,
-      });
+      chartSyncService.broadcastCrosshair(
+        panelInstanceId,
+        {
+          time: param.time as number,
+        },
+        activeCanonicalIdRef.current
+      );
     });
 
     // Listen for incoming mirrored crosshair moves
-    const unsubCrosshairSync = chartSyncService.subscribeCrosshair(panelInstanceId, (point) => {
-      if (!isSyncEnabledRef.current) {
-        setMirroredCrosshairX(null);
-        setMirroredTime(null);
-        return;
-      }
-      if (!chartRef.current || !chartContainerRef.current) return;
-      if (chartContainerRef.current.clientWidth === 0 || chartContainerRef.current.clientHeight === 0) {
-        return;
-      }
-      if (point.time === null) {
-        setMirroredCrosshairX(null);
-        setMirroredTime(null);
-        return;
-      }
-      try {
-        const x = chartRef.current.timeScale().timeToCoordinate(point.time as any);
-        if (x !== null && x >= 0 && x <= chartContainerRef.current.clientWidth) {
-          setMirroredCrosshairX(x);
-          setMirroredTime(point.time);
-        } else {
+    const unsubCrosshairSync = chartSyncService.subscribeCrosshair(
+      panelInstanceId,
+      (point, sourceInstrumentId) => {
+        if (
+          !isSyncEnabledRef.current ||
+          (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== activeCanonicalIdRef.current)
+        ) {
+          setMirroredCrosshairX(null);
+          setMirroredTime(null);
+          return;
+        }
+        if (!chartRef.current || !chartContainerRef.current) return;
+        if (chartContainerRef.current.clientWidth === 0 || chartContainerRef.current.clientHeight === 0) {
+          return;
+        }
+        if (point.time === null) {
+          setMirroredCrosshairX(null);
+          setMirroredTime(null);
+          return;
+        }
+        try {
+          const x = chartRef.current.timeScale().timeToCoordinate(point.time as any);
+          if (x !== null && x >= 0 && x <= chartContainerRef.current.clientWidth) {
+            setMirroredCrosshairX(x);
+            setMirroredTime(point.time);
+          } else {
+            setMirroredCrosshairX(null);
+            setMirroredTime(null);
+          }
+        } catch {
           setMirroredCrosshairX(null);
           setMirroredTime(null);
         }
-      } catch {
-        setMirroredCrosshairX(null);
-        setMirroredTime(null);
       }
-    });
+    );
 
     // Delta histogram series at bottom
     const histogram = chart.addSeries(HistogramSeries, {
@@ -596,7 +634,7 @@ export default function CVDPanel({
       unsubLogicalSync();
       unsubRangeSync();
       unsubCrosshairSync();
-      chartSyncService.clearCrosshair(panelInstanceId);
+      chartSyncService.clearCrosshair(panelInstanceId, activeCanonicalIdRef.current);
       if (chartRef.current) {
         chartRef.current.remove();
         chartRef.current = null;

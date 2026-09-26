@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
+import { marketMirror } from '../services/marketMirror';
+import { canonicalizeInstrumentId } from '../services/instruments';
 import { calculateEMA, calculateSMA } from '../utils/indicators';
 import PanelHeader from './PanelHeader';
 import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
-import { TrendingUp, TrendingDown, Activity, Compass, ShieldCheck } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, Compass, Loader2, ShieldCheck } from 'lucide-react';
 
 interface TrendDirectionPanelProps {
   defaultGroup?: LinkGroup;
@@ -28,24 +30,66 @@ export default function TrendDirectionPanel({ defaultGroup = 'BLUE' }: TrendDire
   const activeInstrument = getSymbolForGroup(currentGroup);
   const [candles, setCandles] = useState<Candle[]>([]);
   const [candles1D, setCandles1D] = useState<Candle[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const symbol = activeInstrument?.symbol || 'BTCUSDT';
   const displaySymbol = symbol.replace('USDT', '/USDT');
 
-  // Load candles for active coin
+  // Load candles for active coin with authoritative exchange fetching
   useEffect(() => {
     if (!activeInstrument) return;
-    const data15m = marketData.getHistoricalCandles(activeInstrument.id, '15m');
-    setCandles(data15m);
-    const data1D = marketData.getHistoricalCandles(activeInstrument.id, '1D');
-    setCandles1D(data1D);
+    let isMounted = true;
+    setIsLoading(true);
 
+    const initial15m = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+    const initial1D = marketData.getHistoricalCandles(activeInstrument.id, '1D');
+    if (initial15m.length > 0) {
+      setCandles(initial15m);
+      setIsLoading(false);
+    }
+    if (initial1D.length > 0) setCandles1D(initial1D);
+
+    // Fetch authoritative historical candles from Binance REST API
+    Promise.all([
+      marketData.fetchAuthoritativeHistory(activeInstrument.id, '15m'),
+      marketData.fetchAuthoritativeHistory(activeInstrument.id, '1D'),
+    ])
+      .then(() => {
+        if (!isMounted) return;
+        const fresh15m = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+        const fresh1D = marketData.getHistoricalCandles(activeInstrument.id, '1D');
+        if (fresh15m.length > 0) setCandles(fresh15m);
+        if (fresh1D.length > 0) setCandles1D(fresh1D);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    // Subscribe to Stale-While-Revalidate mirror cache
+    const canonical = canonicalizeInstrumentId(activeInstrument.id);
+    const unsubMirror = marketMirror.subscribeCandles((instId, tf, freshCandles) => {
+      if (!isMounted) return;
+      if (canonicalizeInstrumentId(instId) === canonical) {
+        if (tf === '15m' && freshCandles.length > 0) {
+          setCandles(freshCandles);
+          setIsLoading(false);
+        }
+        if (tf === '1D' && freshCandles.length > 0) {
+          setCandles1D(freshCandles);
+        }
+      }
+    });
+
+    // Real-time authoritative kline stream subscriber
     const gen = Date.now();
-    const unsub = marketData.subscribeAuthoritativeCandles(
+    const unsubCandles = marketData.subscribeAuthoritativeCandles(
       activeInstrument.id,
       '15m',
       gen,
       (candle) => {
+        if (!isMounted) return;
+        setIsLoading(false);
         setCandles((prev) => {
           if (prev.length === 0) return [candle];
           const last = prev[prev.length - 1];
@@ -57,74 +101,87 @@ export default function TrendDirectionPanel({ defaultGroup = 'BLUE' }: TrendDire
       }
     );
 
-    return () => unsub();
-  }, [activeInstrument.id]);
+    return () => {
+      isMounted = false;
+      unsubMirror();
+      unsubCandles();
+    };
+  }, [activeInstrument?.id]);
 
-  // Compute trend metrics for LTTD, MID, MACRO, STTD
+  // Compute trend metrics for LTTD, MID, MACRO, STTD from real candles
   const metrics: TrendMetric[] = useMemo(() => {
-    const list = candles.length > 0 ? candles : [];
+    if (candles.length === 0) return [];
+
+    const list = candles;
     const listDaily = candles1D.length > 0 ? candles1D : candles;
 
-    const lastPrice = list.length > 0 ? list[list.length - 1].close : 65000;
-    const firstPrice = list.length > 0 ? list[0].close : lastPrice;
+    const lastPrice = list[list.length - 1].close;
+    const firstPrice = list[0].close;
     const change24h = firstPrice > 0 ? ((lastPrice - firstPrice) / firstPrice) * 100 : 0;
 
-    // 1. MACRO (Macro Trend Direction: Daily/Weekly horizon based on Daily SMA50 vs SMA200 or long trend)
+    // 1. MACRO (Macro Trend Direction: Daily/Weekly horizon based on Daily SMA20/SMA50 or 15m EMA100)
     let macroPositive = true;
-    let macroScore = 85;
-    if (listDaily.length >= 30) {
-      const sma50 = calculateSMA(listDaily, Math.min(50, listDaily.length));
-      const lastSma50 = sma50.length > 0 ? sma50[sma50.length - 1].value : lastPrice;
-      macroPositive = lastPrice >= lastSma50;
-      const diffPct = Math.abs((lastPrice - lastSma50) / lastSma50) * 100;
-      macroScore = Math.min(100, Math.max(20, Math.round(diffPct * 15 + 50)));
+    let macroScore = 50;
+    if (listDaily.length >= 20) {
+      const sma = calculateSMA(listDaily, Math.min(50, listDaily.length));
+      const lastSma = sma.length > 0 ? sma[sma.length - 1].value : lastPrice;
+      macroPositive = lastPrice >= lastSma;
+      const diffPct = Math.abs((lastPrice - lastSma) / lastSma) * 100;
+      macroScore = Math.min(100, Math.max(10, Math.round(diffPct * 12 + 50)));
     } else {
       macroPositive = change24h >= 0;
-      macroScore = 75;
+      const momentumPct = Math.min(5, Math.abs(change24h));
+      macroScore = Math.min(100, Math.max(10, Math.round(momentumPct * 10 + 50)));
     }
 
-    // 2. LTTD (Long-Term Trend Direction: Daily EMA20 vs EMA50)
+    // 2. LTTD (Long-Term Trend Direction: Daily EMA20 or 15m EMA50)
     let lttdPositive = true;
-    let lttdScore = 80;
-    if (listDaily.length >= 20) {
-      const ema20 = calculateEMA(listDaily, 20);
-      const lastEma20 = ema20.length > 0 ? ema20[ema20.length - 1].value : lastPrice;
-      lttdPositive = lastPrice >= lastEma20;
-      const diffPct = Math.abs((lastPrice - lastEma20) / lastEma20) * 100;
-      lttdScore = Math.min(100, Math.max(30, Math.round(diffPct * 20 + 50)));
+    let lttdScore = 50;
+    if (listDaily.length >= 10) {
+      const ema = calculateEMA(listDaily, Math.min(20, listDaily.length));
+      const lastEma = ema.length > 0 ? ema[ema.length - 1].value : lastPrice;
+      lttdPositive = lastPrice >= lastEma;
+      const diffPct = Math.abs((lastPrice - lastEma) / lastEma) * 100;
+      lttdScore = Math.min(100, Math.max(15, Math.round(diffPct * 15 + 50)));
+    } else if (list.length >= 30) {
+      const ema50 = calculateEMA(list, 30);
+      const lastEma50 = ema50.length > 0 ? ema50[ema50.length - 1].value : lastPrice;
+      lttdPositive = lastPrice >= lastEma50;
+      const diffPct = Math.abs((lastPrice - lastEma50) / lastEma50) * 100;
+      lttdScore = Math.min(100, Math.max(15, Math.round(diffPct * 20 + 50)));
     } else {
-      lttdPositive = change24h >= -0.5;
-      lttdScore = 70;
+      lttdPositive = change24h >= 0;
+      lttdScore = 50;
     }
 
-    // 3. MID (Mid-Term Trend Direction: 4h / 1h horizon via 15m EMA21 & EMA50)
+    // 3. MID (Mid-Term Trend Direction: 15m EMA21 & EMA50)
     let midPositive = true;
-    let midScore = 75;
-    if (list.length >= 50) {
+    let midScore = 50;
+    if (list.length >= 21) {
       const ema21 = calculateEMA(list, 21);
-      const ema50 = calculateEMA(list, 50);
+      const ema50 = calculateEMA(list, Math.min(50, list.length));
       const lastEma21 = ema21.length > 0 ? ema21[ema21.length - 1].value : lastPrice;
       const lastEma50 = ema50.length > 0 ? ema50[ema50.length - 1].value : lastPrice;
       midPositive = lastEma21 >= lastEma50;
       const spread = Math.abs((lastEma21 - lastEma50) / lastEma50) * 100;
-      midScore = Math.min(100, Math.max(25, Math.round(spread * 40 + 50)));
+      midScore = Math.min(100, Math.max(20, Math.round(spread * 35 + 50)));
     } else {
       midPositive = change24h >= 0;
-      midScore = 65;
+      midScore = 50;
     }
 
     // 4. STTD (Short-Term Tactical Trend Direction: 15m EMA9 & Immediate Price Action)
     let sttdPositive = true;
-    let sttdScore = 90;
-    if (list.length >= 10) {
+    let sttdScore = 50;
+    if (list.length >= 9) {
       const ema9 = calculateEMA(list, 9);
       const lastEma9 = ema9.length > 0 ? ema9[ema9.length - 1].value : lastPrice;
       sttdPositive = lastPrice >= lastEma9;
       const mom = Math.abs((lastPrice - lastEma9) / lastEma9) * 100;
-      sttdScore = Math.min(100, Math.max(30, Math.round(mom * 60 + 50)));
+      sttdScore = Math.min(100, Math.max(25, Math.round(mom * 50 + 50)));
     } else {
-      sttdPositive = change24h > 0.2;
-      sttdScore = 80;
+      sttdPositive = change24h > 0;
+      sttdScore = 50;
     }
 
     return [
@@ -149,8 +206,8 @@ export default function TrendDirectionPanel({ defaultGroup = 'BLUE' }: TrendDire
         score: lttdScore,
         label: lttdPositive ? 'STRONG BULL' : 'BEAR EXPANSION',
         description: lttdPositive
-          ? 'EMA20 menopang tren naik jangka panjang.'
-          : 'Tekanan jual menembus EMA20 ke bawah.',
+          ? 'EMA menopang tren naik jangka panjang.'
+          : 'Tekanan jual menembus EMA jangka panjang.',
       },
       {
         key: 'MID',
@@ -159,25 +216,25 @@ export default function TrendDirectionPanel({ defaultGroup = 'BLUE' }: TrendDire
         timeframe: '4H / 1H',
         isPositive: midPositive,
         score: midScore,
-        label: midPositive ? 'BULL ACCUMULATION' : 'DISTRIBUTION',
+        label: midPositive ? 'ACCUMULATION UP' : 'DISTRIBUTION DOWN',
         description: midPositive
-          ? 'Struktur swing intermediate konfirmasi dominasi beli.'
-          : 'Struktur swing intermediate didominasi penjual.',
+          ? 'EMA21 di atas EMA50 mengonfirmasi tren menengah naik.'
+          : 'EMA21 di bawah EMA50 mengonfirmasi tren menengah turun.',
       },
       {
         key: 'STTD',
         name: 'STTD',
-        fullName: 'Short-Term Tactical Direction',
+        fullName: 'Short-Term Tactical Trend',
         timeframe: '15M / 5M',
         isPositive: sttdPositive,
         score: sttdScore,
-        label: sttdPositive ? 'TACTICAL LONG' : 'TACTICAL SHORT',
+        label: sttdPositive ? 'TACTICAL EXPANSION' : 'TACTICAL PULLBACK',
         description: sttdPositive
-          ? 'Momentum cepat intraday searah dorongan pembeli.'
-          : 'Momentum cepat intraday tertekan order jual.',
+          ? 'Momentum jangka pendek mendorong harga di atas EMA9.'
+          : 'Momentum jangka pendek melemah di bawah EMA9.',
       },
     ];
-  }, [candles, candles1D, activeInstrument]);
+  }, [candles, candles1D]);
 
   const bullishCount = metrics.filter((m) => m.isPositive).length;
   const overallConfluence =
@@ -209,9 +266,18 @@ export default function TrendDirectionPanel({ defaultGroup = 'BLUE' }: TrendDire
         }
       />
 
-      <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
-        {/* Dynamic Coin Explanation Banner */}
-        <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
+      {isLoading && candles.length === 0 ? (
+        <div className="flex-grow flex flex-col items-center justify-center p-6 text-center space-y-3">
+          <Loader2 size={24} className="text-accent animate-spin" />
+          <div className="text-xs text-white font-bold">Memuat Data Tren Resmi [{displaySymbol}]</div>
+          <div className="text-[11px] text-muted max-w-xs">
+            Mengunduh lilin bursa Binance untuk menghitung orientasi vektor tren MACRO, LTTD, MID, dan STTD...
+          </div>
+        </div>
+      ) : (
+        <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
+          {/* Dynamic Coin Explanation Banner */}
+          <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
           <div className="flex items-center space-x-2.5">
             <div
               className={`w-7 h-7 rounded-full flex items-center justify-center font-black text-xs ${
@@ -368,7 +434,8 @@ export default function TrendDirectionPanel({ defaultGroup = 'BLUE' }: TrendDire
             Status: <span className={bullishCount >= 2 ? 'text-[#00c087]' : 'text-[#f6465d]'}>{overallConfluence}</span>
           </div>
         </div>
-      </div>
+        </div>
+      )}
     </div>
   );
 }

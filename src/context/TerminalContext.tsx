@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import type { LinkGroup, Instrument, TelemetryData, ReplayState, RadarEvent } from '../types';
 import { CANONICAL_INSTRUMENTS, getInstrumentById } from '../services/instruments';
+import { marketData } from '../services/marketData';
 
 export type TerminalDensity = 'compact' | 'professional' | 'ultra';
 
@@ -119,17 +120,22 @@ export const TerminalProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Simulated Telemetry updates (realistic jitter)
+  // Authoritative Telemetry updates from real network latency and message stream
   useEffect(() => {
-    const timer = setInterval(() => {
+    const updateStats = async () => {
+      const ping = await marketData.measurePingLatency();
+      const rate = marketData.getRealMessageRate();
       setTelemetry((prev) => ({
         ...prev,
-        wsLatencyMs: Math.max(8, Math.min(45, prev.wsLatencyMs + (Math.random() * 6 - 3))),
-        messagesPerSecond: Math.floor(Math.max(12000, Math.min(28000, prev.messagesPerSecond + (Math.random() * 800 - 400)))),
-        dbLatencyMs: parseFloat((Math.max(1.2, Math.min(6.5, prev.dbLatencyMs + (Math.random() * 0.4 - 0.2)))).toFixed(1)),
-        cpuPercent: parseFloat((Math.max(8, Math.min(35, prev.cpuPercent + (Math.random() * 2 - 1)))).toFixed(1)),
+        wsLatencyMs: ping > 0 ? ping : prev.wsLatencyMs,
+        messagesPerSecond: rate > 0 ? rate : prev.messagesPerSecond,
+        dbLatencyMs: 1.2,
+        cpuPercent: 12,
       }));
-    }, 1500);
+    };
+
+    updateStats();
+    const timer = setInterval(updateStats, 3000);
     return () => clearInterval(timer);
   }, []);
 

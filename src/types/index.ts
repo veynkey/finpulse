@@ -48,6 +48,7 @@ export interface Candle {
   low: number;
   close: number;
   volume: number;
+  takerBuyVolume?: number;
 }
 
 export interface OrderBookLevel {

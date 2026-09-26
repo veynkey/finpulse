@@ -11,12 +11,12 @@ export interface ChartRange {
 export interface CrosshairPoint {
   time: number | null;
   price?: number;
-  ratioX?: number; // relative horizontal position 0.0 - 1.0
+  ratioX?: number; // relative horizontal position 0.0 to 1.0
 }
 
-type TimeRangeListener = (range: TimeRange) => void;
-type RangeListener = (range: ChartRange) => void;
-type CrosshairListener = (point: CrosshairPoint) => void;
+type TimeRangeListener = (range: TimeRange, instrumentId?: string) => void;
+type RangeListener = (range: ChartRange, instrumentId?: string) => void;
+type CrosshairListener = (point: CrosshairPoint, instrumentId?: string) => void;
 
 class ChartSyncService {
   private channel: BroadcastChannel | null = null;
@@ -36,11 +36,11 @@ class ChartSyncService {
         if (!data || !data.type) return;
 
         if (data.type === 'SYNC_TIME_RANGE' && data.range) {
-          this.notifyLocalTimeRangeListeners(data.sourceId, data.range);
+          this.notifyLocalTimeRangeListeners(data.sourceId, data.range, data.instrumentId);
         } else if (data.type === 'SYNC_LOGICAL_RANGE' && data.range) {
-          this.notifyLocalRangeListeners(data.sourceId, data.range);
+          this.notifyLocalRangeListeners(data.sourceId, data.range, data.instrumentId);
         } else if (data.type === 'SYNC_CROSSHAIR') {
-          this.notifyLocalCrosshairListeners(data.sourceId, data.point);
+          this.notifyLocalCrosshairListeners(data.sourceId, data.point, data.instrumentId);
         }
       };
     } catch (e) {
@@ -49,7 +49,7 @@ class ChartSyncService {
   }
 
   // TIME RANGE (TIMESTAMP BASED: SCROLL / ZOOM / PAN) SYNC
-  public broadcastTimeRange(sourceId: string, range: TimeRange) {
+  public broadcastTimeRange(sourceId: string, range: TimeRange, instrumentId?: string) {
     if (!range || typeof range.from !== 'number' || typeof range.to !== 'number') return;
     if (isNaN(range.from) || isNaN(range.to) || range.from >= range.to) return;
 
@@ -61,7 +61,7 @@ class ChartSyncService {
     this.lastTimeBroadcastTimestamp = now;
 
     // 1. Notify local in-window subscribers
-    this.notifyLocalTimeRangeListeners(sourceId, range);
+    this.notifyLocalTimeRangeListeners(sourceId, range, instrumentId);
 
     // 2. Broadcast across monitors / windows
     if (this.channel) {
@@ -69,6 +69,7 @@ class ChartSyncService {
         this.channel.postMessage({
           type: 'SYNC_TIME_RANGE',
           sourceId,
+          instrumentId,
           range,
         });
       } catch {}
@@ -82,16 +83,16 @@ class ChartSyncService {
     };
   }
 
-  private notifyLocalTimeRangeListeners(sourceId: string, range: TimeRange) {
+  private notifyLocalTimeRangeListeners(sourceId: string, range: TimeRange, instrumentId?: string) {
     this.timeRangeListeners.forEach((callback, id) => {
       if (id !== sourceId) {
-        callback(range);
+        callback(range, instrumentId);
       }
     });
   }
 
-  // LOGICAL RANGE (FALLBACK INDEX-BASED) SYNC
-  public broadcastLogicalRange(sourceId: string, range: ChartRange) {
+  // LOGICAL RANGE (INDEX-BASED) SYNC
+  public broadcastLogicalRange(sourceId: string, range: ChartRange, instrumentId?: string) {
     const now = performance.now();
     if (this.lastLogicalBroadcastSource === sourceId && now - this.lastLogicalBroadcastTimestamp < 16) {
       return;
@@ -99,13 +100,14 @@ class ChartSyncService {
     this.lastLogicalBroadcastSource = sourceId;
     this.lastLogicalBroadcastTimestamp = now;
 
-    this.notifyLocalRangeListeners(sourceId, range);
+    this.notifyLocalRangeListeners(sourceId, range, instrumentId);
 
     if (this.channel) {
       try {
         this.channel.postMessage({
           type: 'SYNC_LOGICAL_RANGE',
           sourceId,
+          instrumentId,
           range,
         });
       } catch {}
@@ -119,31 +121,32 @@ class ChartSyncService {
     };
   }
 
-  private notifyLocalRangeListeners(sourceId: string, range: ChartRange) {
+  private notifyLocalRangeListeners(sourceId: string, range: ChartRange, instrumentId?: string) {
     this.rangeListeners.forEach((callback, id) => {
       if (id !== sourceId) {
-        callback(range);
+        callback(range, instrumentId);
       }
     });
   }
 
   // CROSSHAIR MIRRORING SYNC
-  public broadcastCrosshair(sourceId: string, point: CrosshairPoint) {
-    this.notifyLocalCrosshairListeners(sourceId, point);
+  public broadcastCrosshair(sourceId: string, point: CrosshairPoint, instrumentId?: string) {
+    this.notifyLocalCrosshairListeners(sourceId, point, instrumentId);
 
     if (this.channel) {
       try {
         this.channel.postMessage({
           type: 'SYNC_CROSSHAIR',
           sourceId,
+          instrumentId,
           point,
         });
       } catch {}
     }
   }
 
-  public clearCrosshair(sourceId: string) {
-    this.broadcastCrosshair(sourceId, { time: null });
+  public clearCrosshair(sourceId: string, instrumentId?: string) {
+    this.broadcastCrosshair(sourceId, { time: null }, instrumentId);
   }
 
   public subscribeCrosshair(id: string, callback: CrosshairListener): () => void {
@@ -153,10 +156,10 @@ class ChartSyncService {
     };
   }
 
-  private notifyLocalCrosshairListeners(sourceId: string, point: CrosshairPoint) {
+  private notifyLocalCrosshairListeners(sourceId: string, point: CrosshairPoint, instrumentId?: string) {
     this.crosshairListeners.forEach((callback, id) => {
       if (id !== sourceId) {
-        callback(point);
+        callback(point, instrumentId);
       }
     });
   }

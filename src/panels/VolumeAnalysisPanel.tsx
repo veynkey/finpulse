@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTerminal } from '../context/TerminalContext';
 import { marketData, type TakerFlowStats } from '../services/marketData';
+import { marketMirror } from '../services/marketMirror';
+import { canonicalizeInstrumentId } from '../services/instruments';
 import PanelHeader from './PanelHeader';
 import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
-import { BarChart2, Flame, ArrowUpRight, ArrowDownRight, AlertTriangle } from 'lucide-react';
+import { BarChart2, Flame, ArrowUpRight, ArrowDownRight, AlertTriangle, Loader2 } from 'lucide-react';
 
 interface VolumeAnalysisPanelProps {
   defaultGroup?: LinkGroup;
@@ -15,6 +17,7 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
   const [currentGroup, setCurrentGroup] = useState<LinkGroup>(defaultGroup);
   const activeInstrument = getSymbolForGroup(currentGroup);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [flowStats, setFlowStats] = useState<TakerFlowStats>(() =>
     marketData.getTakerFlowStats(activeInstrument?.id || 'BTC-USDT:BINANCE')
   );
@@ -25,12 +28,44 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
   // Load candles and subscribe to authoritative taker flow for active coin
   useEffect(() => {
     if (!activeInstrument) return;
-    const data = marketData.getHistoricalCandles(activeInstrument.id, '15m');
-    setCandles(data);
+    let isMounted = true;
+    setIsLoading(true);
+
+    const initial = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+    if (initial.length > 0) {
+      setCandles(initial);
+      setIsLoading(false);
+    }
+
+    // Fetch authoritative historical candles from Binance REST API
+    marketData
+      .fetchAuthoritativeHistory(activeInstrument.id, '15m')
+      .then(() => {
+        if (!isMounted) return;
+        const fresh = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+        if (fresh.length > 0) setCandles(fresh);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsLoading(false);
+      });
 
     // Synchronize authoritative taker pressure matching OrderFlowPanel
     const unsubFlow = marketData.subscribeTakerFlow(activeInstrument.id, (stats) => {
+      if (!isMounted) return;
       setFlowStats(stats);
+    });
+
+    // Subscribe to Stale-While-Revalidate mirror cache
+    const canonical = canonicalizeInstrumentId(activeInstrument.id);
+    const unsubMirror = marketMirror.subscribeCandles((instId, tf, freshCandles) => {
+      if (!isMounted) return;
+      if (canonicalizeInstrumentId(instId) === canonical && tf === '15m') {
+        if (freshCandles.length > 0) {
+          setCandles(freshCandles);
+          setIsLoading(false);
+        }
+      }
     });
 
     const gen = Date.now();
@@ -39,6 +74,8 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
       '15m',
       gen,
       (candle) => {
+        if (!isMounted) return;
+        setIsLoading(false);
         setCandles((prev) => {
           if (prev.length === 0) return [candle];
           const last = prev[prev.length - 1];
@@ -51,26 +88,29 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
     );
 
     return () => {
+      isMounted = false;
       unsubFlow();
+      unsubMirror();
       unsubCandles();
     };
   }, [activeInstrument?.id]);
 
-  // Compute Volume Dynamics & RVOL
+  // Compute Volume Dynamics & RVOL strictly from authoritative candles
   const volumeStats = useMemo(() => {
-    if (candles.length < 20) {
+    if (candles.length === 0) {
       return {
         rvol: 1.0,
-        avgVol20: 1000,
-        currentVol: 1000,
+        avgVol20: 0,
+        currentVol: 0,
         isSpike: false,
         spikeMultiplier: 1.0,
-        volumeTrend: 'NORMAL',
+        volumeTrend: 'CALCULATING',
       };
     }
 
-    const recent = candles.slice(-20);
-    const avgVol20 = recent.reduce((sum, c) => sum + c.volume, 0) / 20;
+    const count = Math.min(20, candles.length);
+    const recent = candles.slice(-count);
+    const avgVol20 = recent.reduce((sum, c) => sum + c.volume, 0) / count;
     const current = recent[recent.length - 1];
     const currentVol = current.volume;
 
@@ -121,7 +161,16 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
         }
       />
 
-      <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
+      {isLoading && candles.length === 0 ? (
+        <div className="flex-grow flex flex-col items-center justify-center p-6 text-center space-y-3">
+          <Loader2 size={24} className="text-accent animate-spin" />
+          <div className="text-xs text-white font-bold">Memuat Data Volume Resmi [{displaySymbol}]</div>
+          <div className="text-[11px] text-muted max-w-xs">
+            Mengunduh volume & taker orderflow real-time dari bursa Binance...
+          </div>
+        </div>
+      ) : (
+        <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
         {/* Dynamic Coin Explanation Card */}
         <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
           <div>
@@ -243,6 +292,7 @@ export default function VolumeAnalysisPanel({ defaultGroup = 'BLUE' }: VolumeAna
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

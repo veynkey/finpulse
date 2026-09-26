@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
+import { marketMirror } from '../services/marketMirror';
+import { canonicalizeInstrumentId } from '../services/instruments';
 import { calculateEMA } from '../utils/indicators';
 import PanelHeader from './PanelHeader';
 import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
-import { Compass, Gauge, Shield, CheckCircle } from 'lucide-react';
+import { Compass, Gauge, Shield, CheckCircle, Loader2 } from 'lucide-react';
 
 interface RegimeIndicatorPanelProps {
   defaultGroup?: LinkGroup;
@@ -23,22 +25,56 @@ export default function RegimeIndicatorPanel({ defaultGroup = 'BLUE' }: RegimeIn
   const [currentGroup, setCurrentGroup] = useState<LinkGroup>(defaultGroup);
   const activeInstrument = getSymbolForGroup(currentGroup);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   const symbol = activeInstrument?.symbol || 'BTCUSDT';
   const displaySymbol = symbol.replace('USDT', '/USDT');
 
-  // Load candles for active coin
+  // Load candles for active coin with authoritative exchange fetching
   useEffect(() => {
     if (!activeInstrument) return;
-    const data = marketData.getHistoricalCandles(activeInstrument.id, '15m');
-    setCandles(data);
+    let isMounted = true;
+    setIsLoading(true);
+
+    const initial = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+    if (initial.length > 0) {
+      setCandles(initial);
+      if (initial.length >= 14) setIsLoading(false);
+    }
+
+    // Fetch authoritative historical candles from Binance REST API
+    marketData
+      .fetchAuthoritativeHistory(activeInstrument.id, '15m')
+      .then(() => {
+        if (!isMounted) return;
+        const fresh = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+        if (fresh.length > 0) setCandles(fresh);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    // Subscribe to Stale-While-Revalidate mirror cache
+    const canonical = canonicalizeInstrumentId(activeInstrument.id);
+    const unsubMirror = marketMirror.subscribeCandles((instId, tf, freshCandles) => {
+      if (!isMounted) return;
+      if (canonicalizeInstrumentId(instId) === canonical && tf === '15m') {
+        if (freshCandles.length > 0) {
+          setCandles(freshCandles);
+          setIsLoading(false);
+        }
+      }
+    });
 
     const gen = Date.now();
-    const unsub = marketData.subscribeAuthoritativeCandles(
+    const unsubCandles = marketData.subscribeAuthoritativeCandles(
       activeInstrument.id,
       '15m',
       gen,
       (candle) => {
+        if (!isMounted) return;
+        setIsLoading(false);
         setCandles((prev) => {
           if (prev.length === 0) return [candle];
           const last = prev[prev.length - 1];
@@ -50,24 +86,28 @@ export default function RegimeIndicatorPanel({ defaultGroup = 'BLUE' }: RegimeIn
       }
     );
 
-    return () => unsub();
-  }, [activeInstrument.id]);
+    return () => {
+      isMounted = false;
+      unsubMirror();
+      unsubCandles();
+    };
+  }, [activeInstrument?.id]);
 
-  // Compute Choppiness Index (CHOP) & Market Regime
+  // Compute Choppiness Index (CHOP) & Market Regime strictly from real candles
   const regimeAnalysis = useMemo(() => {
-    if (candles.length < 20) {
+    if (candles.length < 2) {
       return {
         regime: 'CHOPPY_ACCUMULATION' as MarketRegimeType,
-        chopIndex: 55,
-        atrPercentile: 50,
-        label: 'CHOPPY ACCUMULATION (KONSOLIDASI)',
-        color: '#f59e0b',
-        playbook: 'Fokus scalping batas support/resistance. Hindari mengejar breakout.',
-        description: 'Pasar berada dalam fase sideways konsolidasi tanpa arah tren dominan.',
+        chopIndex: 0,
+        atrPercentile: 0,
+        label: 'MENGANALISIS REZIM PASAR',
+        color: '#848e9c',
+        playbook: 'Menunggu candle bursa terkumpul untuk menentukan probabilitas arah.',
+        description: 'Data lilin bursa Binance sedang diakumulasikan.',
       };
     }
 
-    const n = 14;
+    const n = Math.min(14, candles.length);
     const slice = candles.slice(-n);
 
     // 1. Calculate True Ranges and sum
@@ -189,9 +229,18 @@ export default function RegimeIndicatorPanel({ defaultGroup = 'BLUE' }: RegimeIn
         }
       />
 
-      <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
-        {/* Dynamic Coin Explanation Banner */}
-        <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
+      {isLoading && candles.length === 0 ? (
+        <div className="flex-grow flex flex-col items-center justify-center p-6 text-center space-y-3">
+          <Loader2 size={24} className="text-accent animate-spin" />
+          <div className="text-xs text-white font-bold">Menganalisis Rezim Pasar [{displaySymbol}]</div>
+          <div className="text-[11px] text-muted max-w-xs">
+            Mengunduh lilin bursa Binance untuk menghitung Choppiness Index dan struktur tren...
+          </div>
+        </div>
+      ) : (
+        <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
+          {/* Dynamic Coin Explanation Banner */}
+          <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
           <div>
             <div className="flex items-center space-x-2">
               <span className="text-xs font-bold text-white tracking-wider">{displaySymbol}</span>
@@ -290,6 +339,7 @@ export default function RegimeIndicatorPanel({ defaultGroup = 'BLUE' }: RegimeIn
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }

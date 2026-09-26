@@ -1,10 +1,12 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
+import { marketMirror } from '../services/marketMirror';
+import { canonicalizeInstrumentId } from '../services/instruments';
 import PanelHeader from './PanelHeader';
 import QuickCoinSelector from '../components/QuickCoinSelector';
 import type { LinkGroup, Candle } from '../types';
-import { AlertCircle, ArrowRightLeft } from 'lucide-react';
+import { AlertCircle, ArrowRightLeft, Loader2 } from 'lucide-react';
 
 interface ZScorePanelProps {
   defaultGroup?: LinkGroup;
@@ -15,23 +17,57 @@ export default function ZScorePanel({ defaultGroup = 'BLUE' }: ZScorePanelProps)
   const [currentGroup, setCurrentGroup] = useState<LinkGroup>(defaultGroup);
   const activeInstrument = getSymbolForGroup(currentGroup);
   const [candles, setCandles] = useState<Candle[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [period, setPeriod] = useState<number>(20);
 
   const symbol = activeInstrument?.symbol || 'BTCUSDT';
   const displaySymbol = symbol.replace('USDT', '/USDT');
 
-  // Load candle data for the active coin
+  // Load candle data for the active coin with authoritative exchange fetching
   useEffect(() => {
     if (!activeInstrument) return;
-    const data = marketData.getHistoricalCandles(activeInstrument.id, '15m');
-    setCandles(data);
+    let isMounted = true;
+    setIsLoading(true);
+
+    const initial = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+    if (initial.length > 0) {
+      setCandles(initial);
+      if (initial.length >= period) setIsLoading(false);
+    }
+
+    // Fetch authoritative historical candles from Binance REST API
+    marketData
+      .fetchAuthoritativeHistory(activeInstrument.id, '15m')
+      .then(() => {
+        if (!isMounted) return;
+        const fresh = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+        if (fresh.length > 0) setCandles(fresh);
+        setIsLoading(false);
+      })
+      .catch(() => {
+        if (isMounted) setIsLoading(false);
+      });
+
+    // Subscribe to Stale-While-Revalidate mirror cache
+    const canonical = canonicalizeInstrumentId(activeInstrument.id);
+    const unsubMirror = marketMirror.subscribeCandles((instId, tf, freshCandles) => {
+      if (!isMounted) return;
+      if (canonicalizeInstrumentId(instId) === canonical && tf === '15m') {
+        if (freshCandles.length > 0) {
+          setCandles(freshCandles);
+          setIsLoading(false);
+        }
+      }
+    });
 
     const gen = Date.now();
-    const unsub = marketData.subscribeAuthoritativeCandles(
+    const unsubCandles = marketData.subscribeAuthoritativeCandles(
       activeInstrument.id,
       '15m',
       gen,
       (candle) => {
+        if (!isMounted) return;
+        setIsLoading(false);
         setCandles((prev) => {
           if (prev.length === 0) return [candle];
           const last = prev[prev.length - 1];
@@ -43,19 +79,23 @@ export default function ZScorePanel({ defaultGroup = 'BLUE' }: ZScorePanelProps)
       }
     );
 
-    return () => unsub();
-  }, [activeInstrument.id]);
+    return () => {
+      isMounted = false;
+      unsubMirror();
+      unsubCandles();
+    };
+  }, [activeInstrument?.id, period]);
 
-  // Compute Price and Volume Z-Score
+  // Compute Price and Volume Z-Score strictly from real candles
   const zScoreStats = useMemo(() => {
-    if (candles.length < period) {
+    if (candles.length < 2) {
       const fallbackPrice = candles.length > 0 ? candles[candles.length - 1].close : 0;
       return {
         priceZ: 0,
         volumeZ: 0,
         meanPrice: fallbackPrice,
         stdDevPrice: 1,
-        meanVol: 100,
+        meanVol: 0,
         stdDevVol: 1,
         currentPrice: fallbackPrice,
         currentVol: 0,
@@ -63,32 +103,34 @@ export default function ZScorePanel({ defaultGroup = 'BLUE' }: ZScorePanelProps)
       };
     }
 
-    const slice = candles.slice(-period);
+    const effectivePeriod = Math.min(period, candles.length);
+    const slice = candles.slice(-effectivePeriod);
     const prices = slice.map((c) => c.close);
     const volumes = slice.map((c) => c.volume);
 
     // Price Mean & StdDev
-    const meanPrice = prices.reduce((a, b) => a + b, 0) / period;
-    const priceVariance = prices.reduce((a, b) => a + Math.pow(b - meanPrice, 2), 0) / period;
+    const meanPrice = prices.reduce((a, b) => a + b, 0) / effectivePeriod;
+    const priceVariance = prices.reduce((a, b) => a + Math.pow(b - meanPrice, 2), 0) / effectivePeriod;
     const stdDevPrice = Math.sqrt(priceVariance) || 0.0001;
 
     const currentPrice = prices[prices.length - 1];
     const priceZ = (currentPrice - meanPrice) / stdDevPrice;
 
     // Volume Mean & StdDev
-    const meanVol = volumes.reduce((a, b) => a + b, 0) / period;
-    const volVariance = volumes.reduce((a, b) => a + Math.pow(b - meanVol, 2), 0) / period;
+    const meanVol = volumes.reduce((a, b) => a + b, 0) / effectivePeriod;
+    const volVariance = volumes.reduce((a, b) => a + Math.pow(b - meanVol, 2), 0) / effectivePeriod;
     const stdDevVol = Math.sqrt(volVariance) || 0.0001;
 
     const currentVol = volumes[volumes.length - 1];
     const volumeZ = (currentVol - meanVol) / stdDevVol;
 
     // Distribution series for mini histogram
-    const recentZ = candles.slice(-40).map((c, idx, arr) => {
-      if (idx < period) return 0;
-      const sub = arr.slice(idx - period, idx);
-      const m = sub.reduce((a, b) => a + b.close, 0) / period;
-      const v = Math.sqrt(sub.reduce((a, b) => a + Math.pow(b.close - m, 2), 0) / period) || 1;
+    const lookback = Math.min(40, candles.length);
+    const recentZ = candles.slice(-lookback).map((c, idx, arr) => {
+      if (idx < 5) return 0;
+      const sub = arr.slice(0, idx + 1);
+      const m = sub.reduce((a, b) => a + b.close, 0) / sub.length;
+      const v = Math.sqrt(sub.reduce((a, b) => a + Math.pow(b.close - m, 2), 0) / sub.length) || 1;
       return (c.close - m) / v;
     });
 
@@ -152,9 +194,18 @@ export default function ZScorePanel({ defaultGroup = 'BLUE' }: ZScorePanelProps)
         }
       />
 
-      <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
-        {/* Dynamic Coin Explanation Card */}
-        <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
+      {isLoading && candles.length === 0 ? (
+        <div className="flex-grow flex flex-col items-center justify-center p-6 text-center space-y-3">
+          <Loader2 size={24} className="text-accent animate-spin" />
+          <div className="text-xs text-white font-bold">Memuat Data Statistik Z-Score [{displaySymbol}]</div>
+          <div className="text-[11px] text-muted max-w-xs">
+            Mengunduh lilin bursa Binance untuk menghitung deviasi standar dan mean reversion...
+          </div>
+        </div>
+      ) : (
+        <div className="flex-grow p-3 flex flex-col space-y-3 overflow-y-auto">
+          {/* Dynamic Coin Explanation Card */}
+          <div className="bg-[#0b0d13] border border-border/60 rounded-md p-2.5 flex items-center justify-between">
           <div>
             <div className="flex items-center space-x-2">
               <span className="text-xs font-bold text-white tracking-wider">{displaySymbol}</span>
@@ -267,6 +318,7 @@ export default function ZScorePanel({ defaultGroup = 'BLUE' }: ZScorePanelProps)
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 }
