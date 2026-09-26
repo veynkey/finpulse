@@ -560,47 +560,99 @@ export default function ChartPanel({
       const currentGen = ++subscriptionGenerationRef.current;
       setIsLoadingHistory(candles.length === 0);
 
+      // Track whether the primary series has received its first full dataset.
+      // Subsequent updates use update() instead of setData() to prevent flickering.
+      let primarySeriesHasData = candles.length > 0;
+
       // Listen for background REST updates via Stale-While-Revalidate mirror cache
       const unsubMirror = marketMirror.subscribeCandles((instId, tf, freshCandles) => {
-        if (canonicalizeInstrumentId(instId) === canonicalActiveId && tf === timeframe && primarySeries) {
-          setIsLoadingHistory(false);
-          const displayCandles = chartType === 'heikin_ashi' ? calculateHeikinAshi(freshCandles) : freshCandles;
-          const currentVisibleRange = chartRef.current?.timeScale().getVisibleRange();
-          if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
-            primarySeries.setData(displayCandles.map((c) => ({ time: c.time, value: c.close })) as any);
-          } else {
-            primarySeries.setData(displayCandles as any);
-          }
-          volumeSeries.setData(
-            displayCandles.map((c) => ({
-              time: c.time,
-              value: c.volume,
-              color: c.close >= c.open ? 'rgba(0, 200, 83, 0.35)' : 'rgba(255, 61, 0, 0.35)',
-            })) as any
-          );
+        if (canonicalizeInstrumentId(instId) !== canonicalActiveId || tf !== timeframe || !primarySeries) return;
+        if (!chartRef.current) return;
 
-          if (currentVisibleRange && chartRef.current) {
+        setIsLoadingHistory(false);
+        const displayCandles = chartType === 'heikin_ashi' ? calculateHeikinAshi(freshCandles) : freshCandles;
+        if (displayCandles.length === 0) return;
+
+        try {
+          if (!primarySeriesHasData) {
+            // Initial population: chart was empty, needs full setData then scroll to latest
+            const savedLogical = chartRef.current.timeScale().getVisibleLogicalRange?.();
+            if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
+              primarySeries.setData(displayCandles.map((c) => ({ time: c.time, value: c.close })) as any);
+            } else {
+              primarySeries.setData(displayCandles as any);
+            }
+            volumeSeries.setData(
+              displayCandles.map((c) => ({
+                time: c.time,
+                value: c.volume,
+                color: c.close >= c.open ? 'rgba(0, 200, 83, 0.35)' : 'rgba(255, 61, 0, 0.35)',
+              })) as any
+            );
+            primarySeriesHasData = true;
             try {
-              chartRef.current.timeScale().setVisibleRange(currentVisibleRange);
+              if (savedLogical) {
+                chartRef.current.timeScale().setVisibleLogicalRange(savedLogical);
+              } else {
+                chartRef.current.timeScale().scrollToRealTime();
+              }
             } catch {}
+
+            if (enabledIndicators.sma20) indicatorSeriesRef.current.get('sma20')?.setData(calculateSMA(freshCandles, 20) as any);
+            if (enabledIndicators.sma50) indicatorSeriesRef.current.get('sma50')?.setData(calculateSMA(freshCandles, 50) as any);
+            if (enabledIndicators.ema9) indicatorSeriesRef.current.get('ema9')?.setData(calculateEMA(freshCandles, 9) as any);
+            if (enabledIndicators.ema21) indicatorSeriesRef.current.get('ema21')?.setData(calculateEMA(freshCandles, 21) as any);
+            if (enabledIndicators.bollinger) {
+              const bb = calculateBollingerBands(freshCandles, 20, 2);
+              indicatorSeriesRef.current.get('bb_upper')?.setData(bb.upper as any);
+              indicatorSeriesRef.current.get('bb_mid')?.setData(bb.middle as any);
+              indicatorSeriesRef.current.get('bb_lower')?.setData(bb.lower as any);
+            }
+            if (enabledIndicators.vwap) indicatorSeriesRef.current.get('vwap')?.setData(calculateVWAP(freshCandles) as any);
+            if (enabledIndicators.rsi) indicatorSeriesRef.current.get('rsi')?.setData(calculateRSI(freshCandles, 14) as any);
+          } else {
+            // Detect whether new historical bars were prepended (infinite scroll backfill)
+            const freshFirstTime = freshCandles.length > 0 ? freshCandles[0].time : null;
+            const isBackfillUpdate = freshFirstTime !== null && freshFirstTime < (displayCandles[0]?.time ?? Infinity);
+
+            if (isBackfillUpdate) {
+              // Backward scroll backfill: must re-render all but preserve the current viewport
+              const savedLogical = chartRef.current.timeScale().getVisibleLogicalRange?.();
+              if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
+                primarySeries.setData(displayCandles.map((c) => ({ time: c.time, value: c.close })) as any);
+              } else {
+                primarySeries.setData(displayCandles as any);
+              }
+              volumeSeries.setData(
+                displayCandles.map((c) => ({
+                  time: c.time,
+                  value: c.volume,
+                  color: c.close >= c.open ? 'rgba(0, 200, 83, 0.35)' : 'rgba(255, 61, 0, 0.35)',
+                })) as any
+              );
+              try {
+                if (savedLogical) chartRef.current.timeScale().setVisibleLogicalRange(savedLogical);
+              } catch {}
+            } else {
+              // Normal closed-bar update: only update the latest candle, no full re-render
+              const last = displayCandles[displayCandles.length - 1];
+              if (last) {
+                if (chartType === 'line' || chartType === 'area' || chartType === 'baseline') {
+                  primarySeries.update({ time: last.time, value: last.close } as any);
+                } else {
+                  primarySeries.update(last as any);
+                }
+                volumeSeries.update({
+                  time: last.time,
+                  value: last.volume,
+                  color: last.close >= last.open ? 'rgba(0, 200, 83, 0.35)' : 'rgba(255, 61, 0, 0.35)',
+                } as any);
+              }
+            }
           }
 
-          // Update active indicators with full fresh dataset
-          if (enabledIndicators.sma20) indicatorSeriesRef.current.get('sma20')?.setData(calculateSMA(freshCandles, 20) as any);
-          if (enabledIndicators.sma50) indicatorSeriesRef.current.get('sma50')?.setData(calculateSMA(freshCandles, 50) as any);
-          if (enabledIndicators.ema9) indicatorSeriesRef.current.get('ema9')?.setData(calculateEMA(freshCandles, 9) as any);
-          if (enabledIndicators.ema21) indicatorSeriesRef.current.get('ema21')?.setData(calculateEMA(freshCandles, 21) as any);
-          if (enabledIndicators.bollinger) {
-            const bb = calculateBollingerBands(freshCandles, 20, 2);
-            indicatorSeriesRef.current.get('bb_upper')?.setData(bb.upper as any);
-            indicatorSeriesRef.current.get('bb_mid')?.setData(bb.middle as any);
-            indicatorSeriesRef.current.get('bb_lower')?.setData(bb.lower as any);
-          }
-          if (enabledIndicators.vwap) indicatorSeriesRef.current.get('vwap')?.setData(calculateVWAP(freshCandles) as any);
-          if (enabledIndicators.rsi) indicatorSeriesRef.current.get('rsi')?.setData(calculateRSI(freshCandles, 14) as any);
-
-          if (displayCandles.length > 0) {
-            const last = displayCandles[displayCandles.length - 1];
+          const last = displayCandles[displayCandles.length - 1];
+          if (last) {
             setLastStats({
               open: last.open,
               high: last.high,
@@ -609,6 +661,8 @@ export default function ChartPanel({
               close: last.close,
             });
           }
+        } catch {
+          // Ignore transient race during chart teardown
         }
       });
 
@@ -1287,7 +1341,7 @@ export default function ChartPanel({
           <div
             className="w-full h-full"
             ref={chartContainerRef}
-            onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId)}
+            onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId, canonicalizeInstrumentId(activeInstrument.id))}
           />
 
           {/* Mirrored Crosshair from CVD / Secondary Monitor */}
