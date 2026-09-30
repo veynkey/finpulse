@@ -26,7 +26,7 @@ import { useTerminal } from '../context/TerminalContext';
 import { chartSyncService } from '../services/chartSyncService';
 import { canonicalizeInstrumentId } from '../services/instruments';
 import { marketData } from '../services/marketData';
-import type { LinkGroup } from '../types';
+import type { LinkGroup, Candle } from '../types';
 import PanelHeader from './PanelHeader';
 
 export type CvdMarketMode = 'SPOT' | 'FUTURES' | 'DUAL';
@@ -110,14 +110,22 @@ export default function CVDPanel({
     hasInitialFitRef.current = false;
   }, [activeSymbol, timeframe]);
 
+  // Handle timeframe changes with cross-panel broadcast
+  const handleTimeframeChange = (newTf: CvdTimeframe) => {
+    setTimeframe(newTf);
+    if (isSyncEnabledRef.current) {
+      chartSyncService.broadcastTimeframe(panelInstanceId, newTf, activeCanonicalIdRef.current);
+    }
+  };
+
   // Listen for timeframe changes triggered from the Fullscreen Hotbar
   useEffect(() => {
     const handleHotbarTf = (e: any) => {
-      if (e?.detail) setTimeframe(e.detail as CvdTimeframe);
+      if (e?.detail) handleTimeframeChange(e.detail as CvdTimeframe);
     };
     window.addEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
     return () => window.removeEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
-  }, []);
+  }, [activeCanonicalId]);
 
   // Real-time metric summaries
   const [spotCvdSummary, setSpotCvdSummary] = useState({ cvd: 0, netDelta: 0, buyRatio: 50, divergence: 'NEUTRAL' });
@@ -367,7 +375,28 @@ export default function CVDPanel({
 
         // Only fitContent on the very first load, preserve user visible range across updates and drags
         if (!hasInitialFitRef.current) {
-          chartRef.current.timeScale().fitContent();
+          let synced = false;
+          if (isSyncEnabledRef.current) {
+            const lastLogical = chartSyncService.getLastKnownLogicalRange(activeCanonicalIdRef.current);
+            if (lastLogical) {
+              try {
+                chartRef.current.timeScale().setVisibleLogicalRange(lastLogical);
+                synced = true;
+              } catch {}
+            }
+            if (!synced) {
+              const lastTime = chartSyncService.getLastKnownTimeRange(activeCanonicalIdRef.current);
+              if (lastTime) {
+                try {
+                  chartRef.current.timeScale().setVisibleRange(lastTime as any);
+                  synced = true;
+                } catch {}
+              }
+            }
+          }
+          if (!synced) {
+            chartRef.current.timeScale().fitContent();
+          }
           hasInitialFitRef.current = true;
         } else if (prevRange) {
           try {
@@ -550,6 +579,18 @@ export default function CVDPanel({
       }
     );
 
+    // Listen for incoming timeframe changes
+    const unsubTimeframeSync = chartSyncService.subscribeTimeframe(
+      panelInstanceId,
+      (newTf, sourceInstrumentId) => {
+        if (!isSyncEnabledRef.current) return;
+        if (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== activeCanonicalIdRef.current) return;
+        if (newTf && newTf !== timeframe) {
+          setTimeframe(newTf as CvdTimeframe);
+        }
+      }
+    );
+
     // Delta histogram series at bottom
     const histogram = chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
@@ -647,6 +688,8 @@ export default function CVDPanel({
       unsubLogicalSync();
       unsubRangeSync();
       unsubCrosshairSync();
+      unsubTimeframeSync();
+      isSyncingRangeRef.current = false;
       chartSyncService.clearCrosshair(panelInstanceId, activeCanonicalIdRef.current);
       if (chartRef.current) {
         chartRef.current.remove();
@@ -744,6 +787,45 @@ export default function CVDPanel({
       if (wsFutRef.current) wsFutRef.current.close();
     };
   }, [activeSymbol, marketMode]);
+
+  // Listen for authoritative candle bar rollover from Binance
+  useEffect(() => {
+    const canonicalId = activeCanonicalIdRef.current;
+    const unsubCandle = marketData.subscribeCandles(canonicalId, timeframe, (candle: Candle) => {
+      if (!latestCandleRef.current) return;
+      // If a new bar timestamp has started on the exchange, roll over seamlessly
+      if (candle.time > latestCandleRef.current.time) {
+        const prevClose = latestCandleRef.current.cvdClose;
+        latestCandleRef.current = {
+          time: candle.time,
+          cvdOpen: prevClose,
+          cvdHigh: prevClose,
+          cvdLow: prevClose,
+          cvdClose: prevClose,
+        };
+        if (candleSeriesRef.current) {
+          candleSeriesRef.current.update({
+            time: candle.time as any,
+            open: prevClose,
+            high: prevClose,
+            low: prevClose,
+            close: prevClose,
+          });
+        }
+        if (deltaHistogramRef.current) {
+          deltaHistogramRef.current.update({
+            time: candle.time as any,
+            value: 0,
+            color: '#00c087',
+          });
+        }
+      }
+    });
+
+    return () => {
+      unsubCandle();
+    };
+  }, [activeCanonicalId, timeframe]);
 
   const formatCvd = (num: number) => {
     const sign = num > 0 ? '+' : '';
@@ -966,7 +1048,7 @@ export default function CVDPanel({
             <button
               key={tf}
               type="button"
-              onClick={() => setTimeframe(tf)}
+              onClick={() => handleTimeframeChange(tf)}
               className={`px-1.5 py-0.5 rounded text-[10px] font-bold transition-colors ${
                 timeframe === tf ? 'bg-white/20 text-white' : 'text-muted hover:text-text'
               }`}
@@ -1132,7 +1214,7 @@ export default function CVDPanel({
           <div
             ref={chartContainerRef}
             className="w-full h-full"
-            onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId)}
+            onMouseLeave={() => chartSyncService.clearCrosshair(panelInstanceId, activeCanonicalIdRef.current)}
           />
 
           {/* Mirrored Crosshair from Main Chart / Secondary Monitor */}

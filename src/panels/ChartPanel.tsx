@@ -393,6 +393,18 @@ export default function ChartPanel({
       }
     );
 
+    // Listen for incoming timeframe changes
+    const unsubTimeframeSync = chartSyncService.subscribeTimeframe(
+      panelInstanceId,
+      (newTf, sourceInstrumentId) => {
+        if (!isSyncEnabledRef.current) return;
+        if (sourceInstrumentId && canonicalizeInstrumentId(sourceInstrumentId) !== currentInstrumentId) return;
+        if (newTf && newTf !== timeframe) {
+          setTimeframe(newTf as any);
+        }
+      }
+    );
+
       // Retrieve initial cached candles immediately (Stale-While-Revalidate)
       const rawCandles = marketData.getHistoricalCandles(activeInstrument.id, timeframe);
       const candles = chartType === 'heikin_ashi' ? calculateHeikinAshi(rawCandles) : rawCandles;
@@ -602,6 +614,18 @@ export default function ChartPanel({
             try {
               if (savedLogical) {
                 chartRef.current.timeScale().setVisibleLogicalRange(savedLogical);
+              } else if (isSyncEnabledRef.current) {
+                const lastLogical = chartSyncService.getLastKnownLogicalRange(canonicalActiveId);
+                if (lastLogical) {
+                  chartRef.current.timeScale().setVisibleLogicalRange(lastLogical);
+                } else {
+                  const lastTime = chartSyncService.getLastKnownTimeRange(canonicalActiveId);
+                  if (lastTime) {
+                    chartRef.current.timeScale().setVisibleRange(lastTime as any);
+                  } else {
+                    chartRef.current.timeScale().fitContent();
+                  }
+                }
               } else {
                 chartRef.current.timeScale().fitContent();
               }
@@ -785,6 +809,8 @@ export default function ChartPanel({
         unsubLogicalSync();
         unsubTimeRangeSync();
         unsubCrosshairSync();
+        unsubTimeframeSync();
+        isSyncingRangeRef.current = false;
         chartSyncService.clearCrosshair(panelInstanceId, currentInstrumentId);
         unsubTrades();
         unsubCandles();
@@ -801,6 +827,14 @@ export default function ChartPanel({
       console.error('Failed to initialize chart in ChartPanel:', err);
     }
   }, [activeInstrument.id, timeframe, chartType, scaleMode, enabledIndicators]);
+
+  // Handle timeframe changes with cross-panel broadcast
+  const handleTimeframeChange = (newTf: '1m' | '5m' | '15m' | '1h' | '4h' | '1D') => {
+    setTimeframe(newTf);
+    if (isSyncEnabledRef.current) {
+      chartSyncService.broadcastTimeframe(panelInstanceId, newTf, canonicalizeInstrumentId(activeInstrument.id));
+    }
+  };
 
   // Dynamically update crosshair mode without re-creating the entire chart
   useEffect(() => {
@@ -819,11 +853,13 @@ export default function ChartPanel({
   // Listen for timeframe changes triggered from the Fullscreen Hotbar
   useEffect(() => {
     const handleHotbarTf = (e: any) => {
-      if (e?.detail) setTimeframe(e.detail);
+      if (e?.detail) {
+        handleTimeframeChange(e.detail as any);
+      }
     };
     window.addEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
     return () => window.removeEventListener('finpulse-hotbar-timeframe', handleHotbarTf);
-  }, []);
+  }, [activeInstrument.id]);
 
   // Risk / Reward computations
   const rrCalculation = useMemo(() => {
@@ -922,7 +958,7 @@ export default function ChartPanel({
               <button
                 key={tf}
                 type="button"
-                onClick={() => setTimeframe(tf)}
+                onClick={() => handleTimeframeChange(tf)}
                 className={`px-1.5 py-0.5 rounded text-[10px] transition-colors ${
                   timeframe === tf ? 'bg-accent text-white font-bold' : 'text-muted hover:text-text'
                 }`}

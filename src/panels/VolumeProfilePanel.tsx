@@ -17,16 +17,33 @@ interface VolumeBucket {
 export default function VolumeProfilePanel({ defaultGroup = 'BLUE' }: { defaultGroup?: LinkGroup }) {
   const { getSymbolForGroup } = useTerminal();
   const [linkGroup, setLinkGroup] = useState<LinkGroup>(defaultGroup);
-  const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '1h'>('15m');
+  const [timeframe, setTimeframe] = useState<'1m' | '5m' | '15m' | '1h'>('1h');
   const [bucketCount, setBucketCount] = useState<number>(36);
   const [candles, setCandles] = useState<Candle[]>([]);
 
   const activeInstrument = getSymbolForGroup(linkGroup);
 
-  // Fetch candles
+  // Fetch candles and subscribe to live candle updates
   useEffect(() => {
-    const data = marketData.getHistoricalCandles(activeInstrument.id, timeframe);
-    setCandles(data);
+    const initialData = marketData.getHistoricalCandles(activeInstrument.id, timeframe);
+    setCandles(initialData);
+
+    const unsubCandle = marketData.subscribeCandles(activeInstrument.id, timeframe, (candle: Candle) => {
+      setCandles((prev) => {
+        if (!prev || prev.length === 0) return [candle];
+        const last = prev[prev.length - 1];
+        if (last.time === candle.time) {
+          return [...prev.slice(0, -1), candle];
+        } else if (candle.time > last.time) {
+          return [...prev, candle];
+        }
+        return prev;
+      });
+    });
+
+    return () => {
+      unsubCandle();
+    };
   }, [activeInstrument.id, timeframe]);
 
   // Compute Volume Profile
@@ -59,16 +76,15 @@ export default function VolumeProfilePanel({ defaultGroup = 'BLUE' }: { defaultG
 
     for (const c of candles) {
       const idx = Math.min(Math.floor((c.close - minPrice) / bucketSize), bucketCount - 1);
-      const isUp = c.close >= c.open;
       if (idx >= 0 && idx < bucketCount) {
         buckets[idx].totalVolume += c.volume;
-        if (isUp) {
-          buckets[idx].buyVolume += c.volume * 0.65;
-          buckets[idx].sellVolume += c.volume * 0.35;
-        } else {
-          buckets[idx].buyVolume += c.volume * 0.35;
-          buckets[idx].sellVolume += c.volume * 0.65;
-        }
+        // Use authentic taker buy volume from Binance klines
+        const buyVol = c.takerBuyVolume !== undefined
+          ? c.takerBuyVolume
+          : (c.close >= c.open ? c.volume * 0.5 : c.volume * 0.5);
+        const sellVol = Math.max(0, c.volume - buyVol);
+        buckets[idx].buyVolume += buyVol;
+        buckets[idx].sellVolume += sellVol;
       }
     }
 

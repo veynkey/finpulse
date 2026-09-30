@@ -565,6 +565,14 @@ class AuthoritativeMarketDataService {
     };
   }
 
+  public subscribeCandles(
+    instrumentId: string,
+    timeframe: string,
+    callback: (candle: Candle, isClosed: boolean) => void
+  ): () => void {
+    return this.subscribeAuthoritativeCandles(instrumentId, timeframe, 1, callback);
+  }
+
   public subscribeQuotes(cb: QuoteCallback): () => void {
     this.quoteListeners.add(cb);
     return () => {
