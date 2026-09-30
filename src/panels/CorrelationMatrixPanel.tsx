@@ -40,7 +40,10 @@ export default function CorrelationMatrixPanel() {
       <PanelHeader
         title="CROSS-ASSET CORRELATION & ATTRIBUTION"
         actions={
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center space-x-1.5">
+            <span className="px-1.5 py-0.5 rounded bg-surface text-muted border border-border/50 text-[9px] font-bold">
+              STATIC REF
+            </span>
             {(['CORRELATION', 'RELATIVE_PERF'] as const).map((tab) => (
               <button
                 key={tab}
@@ -111,7 +114,7 @@ export default function CorrelationMatrixPanel() {
           </div>
 
           <div className="bg-[#121419] p-2 rounded text-[10px] text-muted mt-2 border border-border/40">
-            High positive correlation (&gt;0.70) signifies co-movement. Low correlation indicates diversification value.
+            Static reference benchmark model. High positive correlation (&gt;0.70) signifies co-movement. Low correlation indicates diversification value.
           </div>
         </div>
       )}

@@ -89,7 +89,10 @@ export default function PortfolioRiskPanel() {
       <PanelHeader
         title="PORTFOLIO & QUANT RISK ENGINE"
         actions={
-          <div className="flex items-center space-x-1">
+          <div className="flex items-center space-x-1.5">
+            <span className="px-1.5 py-0.5 rounded bg-surface text-muted border border-border/50 text-[9px] font-bold">
+              SAMPLE PORTFOLIO
+            </span>
             {(['POSITIONS', 'RISK_VAR', 'STRESS'] as const).map((tab) => (
               <button
                 key={tab}
@@ -163,6 +166,9 @@ export default function PortfolioRiskPanel() {
               ))}
             </tbody>
           </table>
+          <div className="p-2 border-t border-border/40 text-[10px] text-muted bg-[#111318]">
+            Sample position book for demonstration of quantitative VaR and stress testing models.
+          </div>
         </div>
       )}
 

@@ -130,7 +130,7 @@ export default function ReplayPanel() {
         <div className="bg-black/40 border border-border/30 rounded p-2 text-[10px] text-muted flex items-start space-x-2">
           <Film className="w-3.5 h-3.5 text-accent mt-0.5 shrink-0" />
           <div>
-            Replay operates through the identical fast-path normalizer pipeline, replaying L2 book snapshots, order-flow ticks, and calculated radar events synchronously.
+            Market replay controller is currently in preview mode. Historical order-flow and L2 book playback engine is scheduled for future release.
           </div>
         </div>
       </div>

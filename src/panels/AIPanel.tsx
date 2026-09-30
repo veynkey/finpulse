@@ -26,14 +26,14 @@ export default function AIPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Link
 
   // Diagnostics state
   const [diagnostics] = useState<AiDiagnostics>({
-    modelName: 'FinPulse-Llama-3.2-3B-Instruct-Q4_K_M',
-    backend: 'Local llama.cpp (Vulkan / AVX2 Accelerated)',
-    vramUsedMb: 1840,
-    vramTotalMb: 8192,
-    contextLength: 8192,
-    tokensPerSecond: 46.5,
-    embeddingStatus: 'Operational (BGE-Small-EN-v1.5)',
-    ragStatus: 'Synchronized (DuckDB Vector Store)',
+    modelName: 'FinPulse Heuristic Telemetry Engine v1',
+    backend: 'In-Memory Semantic Synthesizer (Local)',
+    vramUsedMb: 0,
+    vramTotalMb: 0,
+    contextLength: 4096,
+    tokensPerSecond: 120.0,
+    embeddingStatus: 'Operational (Local Semantic Index)',
+    ragStatus: 'Synchronized (In-Memory Hot Telemetry)',
     availableTools: [
       'query_orderbook_depth',
       'calculate_cvd_delta',
@@ -174,7 +174,7 @@ export default function AIPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Link
               <Cpu className="w-3 h-3 text-accent" />
               <span>Diagnostics</span>
             </button>
-            <span className="bg-up/20 text-up px-1.5 py-0.5 rounded text-[9px] font-bold">LOCAL GGUF</span>
+            <span className="bg-accent/20 text-accent px-1.5 py-0.5 rounded text-[9px] font-bold">HEURISTIC ENGINE</span>
           </div>
         }
       />
@@ -422,7 +422,7 @@ export default function AIPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Link
 
             {/* Modal Footer */}
             <div className="p-2.5 bg-[#161a24] border-t border-border/60 flex items-center justify-between text-[10px] text-muted">
-              <span>Local-first isolated runtime. Zero external LLM telemetry leaks.</span>
+              <span>Rule-based heuristic research synthesis engine. Local telemetry processing.</span>
               <button
                 type="button"
                 onClick={() => setShowDiagnostics(false)}

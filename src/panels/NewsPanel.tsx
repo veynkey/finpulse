@@ -789,6 +789,16 @@ export default function NewsPanel({ defaultGroup = 'BLUE' }: { defaultGroup?: Li
         onLinkGroupChange={setLinkGroup}
         actions={
           <div className="flex items-center space-x-2 text-[10px]">
+            {news !== INITIAL_NEWS && news.length > 0 ? (
+              <span className="px-1.5 py-0.5 rounded bg-up/20 text-up text-[9px] font-bold">
+                LIVE RSS
+              </span>
+            ) : (
+              <span className="px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 text-[9px] font-bold">
+                SEED DATA
+              </span>
+            )}
+
             {isRefreshing ? (
               <span className="text-accent text-[9px] font-bold flex items-center gap-1">
                 <RefreshCw size={10} className="animate-spin" />

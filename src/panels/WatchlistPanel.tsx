@@ -233,11 +233,11 @@ export default function WatchlistPanel({ defaultGroup = 'BLUE' }: { defaultGroup
                   <td className="py-1 px-2 text-center">
                     <span
                       className={`text-[9px] px-1 py-0.5 rounded font-mono ${
-                        isCrypto ? 'bg-accent/20 text-accent' : 'bg-white/10 text-muted'
+                        isCrypto ? 'bg-accent/20 text-accent' : 'bg-white/10 text-muted border border-border/40'
                       }`}
-                      title={isCrypto ? 'Live WebSocket Connected' : 'Institutional Benchmark Feed'}
+                      title={isCrypto ? 'Live Binance WebSocket Connected' : 'Static Indicative Benchmark Reference'}
                     >
-                      {inst.assetClass.toUpperCase().slice(0, 4)}
+                      {isCrypto ? inst.assetClass.toUpperCase().slice(0, 4) : 'REF'}
                     </span>
                   </td>
                 </tr>

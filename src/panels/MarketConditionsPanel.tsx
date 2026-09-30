@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTerminal } from '../context/TerminalContext';
-import { MarketConditionsEngine } from '../services/marketConditions';
+import { marketConditionsService } from '../services/marketConditions';
+import { marketData } from '../services/marketData';
 import type { MarketConditionState, LinkGroup } from '../types';
 import PanelHeader from './PanelHeader';
 import { ShieldCheck, Compass, Clock } from 'lucide-react';
@@ -9,18 +10,38 @@ export default function MarketConditionsPanel({ defaultGroup = 'BLUE' }: { defau
   const { getSymbolForGroup } = useTerminal();
   const [linkGroup, setLinkGroup] = useState<LinkGroup>(defaultGroup);
   const activeInstrument = getSymbolForGroup(linkGroup);
-  const [conditions, setConditions] = useState<MarketConditionState>(() =>
-    MarketConditionsEngine.evaluateConditions(activeInstrument, 0.4, 64520.1)
-  );
+
+  const evaluateCurrent = useCallback(() => {
+    const candles = marketData.getHistoricalCandles(activeInstrument.id, '15m');
+    const book = marketData.getOrderBook(activeInstrument.id);
+    return marketConditionsService.evaluateMarketCondition(activeInstrument.id, candles, book);
+  }, [activeInstrument.id]);
+
+  const [conditions, setConditions] = useState<MarketConditionState>(evaluateCurrent);
 
   useEffect(() => {
-    const update = () => {
-      setConditions(MarketConditionsEngine.evaluateConditions(activeInstrument, 0.35, 64520.1));
+    setConditions(evaluateCurrent());
+
+    const unsubCandle = marketData.subscribeCandles(activeInstrument.id, '15m', () => {
+      setConditions(evaluateCurrent());
+    });
+
+    const unsubQuote = marketData.subscribeQuotes((quote) => {
+      if (quote.instrumentId === activeInstrument.id) {
+        setConditions(evaluateCurrent());
+      }
+    });
+
+    const interval = setInterval(() => {
+      setConditions(evaluateCurrent());
+    }, 5000);
+
+    return () => {
+      unsubCandle();
+      unsubQuote();
+      clearInterval(interval);
     };
-    update();
-    const interval = setInterval(update, 5000);
-    return () => clearInterval(interval);
-  }, [activeInstrument.id]);
+  }, [activeInstrument.id, evaluateCurrent]);
 
   const qualityBadge: Record<
     MarketConditionState['overallQuality'],

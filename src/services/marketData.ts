@@ -51,6 +51,7 @@ class AuthoritativeMarketDataService {
   private candleListeners: Map<string, CandleListenerRegistration> = new Map();
   private quoteListeners: Set<QuoteCallback> = new Set();
   private bookListeners: Set<BookCallback> = new Set();
+  private lastBooks: Map<string, OrderBook> = new Map();
   private radarListeners: Set<RadarCallback> = new Set();
   private takerFlowMap: Map<string, { buyVol: number; sellVol: number; cvd: number }> = new Map();
   private takerFlowListeners: Map<string, (stats: TakerFlowStats, canonicalId: string) => void> = new Map();
@@ -432,6 +433,7 @@ class AuthoritativeMarketDataService {
         midPrice: parseFloat(mid.toFixed(2)),
         lastUpdated: Date.now(),
       };
+      this.lastBooks.set(canonicalId, book);
       this.bookListeners.forEach((cb) => cb(book));
     }
   }
@@ -585,6 +587,11 @@ class AuthoritativeMarketDataService {
     return () => {
       this.bookListeners.delete(cb);
     };
+  }
+
+  public getOrderBook(instrumentId: string): OrderBook | undefined {
+    const canonicalId = canonicalizeInstrumentId(instrumentId);
+    return this.lastBooks.get(canonicalId);
   }
 
   public subscribeRadar(cb: RadarCallback): () => void {

@@ -26,6 +26,59 @@ export class MarketConditionsEngine {
     const inst = getInstrumentById(instrumentId);
     const lastPrice = candles.length > 0 ? candles[candles.length - 1].close : 100;
     const spread = lastBook ? lastBook.spread : lastPrice * 0.0001;
+
+    // Calculate real volume Z-score from last 20 candles
+    let volumeZScore = 0;
+    if (candles.length >= 5) {
+      const recentCandles = candles.slice(-20);
+      const volumes = recentCandles.map((c) => c.volume);
+      const mean = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+      const variance = volumes.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / volumes.length;
+      const std = Math.sqrt(variance);
+      if (std > 0) {
+        const lastVol = volumes[volumes.length - 1];
+        volumeZScore = Math.round(((lastVol - mean) / std) * 10) / 10;
+      }
+    }
+
+    // Calculate real realized volatility from last 20 candle log-returns
+    let realizedVolPct = 25.0;
+    if (candles.length >= 10) {
+      const recent = candles.slice(-21);
+      const logReturns: number[] = [];
+      for (let i = 1; i < recent.length; i++) {
+        logReturns.push(Math.log(recent[i].close / recent[i - 1].close));
+      }
+      const mean = logReturns.reduce((a, b) => a + b, 0) / logReturns.length;
+      const variance = logReturns.reduce((a, b) => a + Math.pow(b - mean, 2), 0) / logReturns.length;
+      const std = Math.sqrt(variance);
+      // Annualized volatility estimate
+      realizedVolPct = Math.min(200, Math.max(1, Math.round(std * Math.sqrt(365 * 24) * 100 * 10) / 10));
+    }
+
+    // Calculate real Choppiness Index (0 - 100) using 14-period True Range formula
+    let choppinessIndex = 50;
+    if (candles.length >= 15) {
+      const period = 14;
+      const slice = candles.slice(-period - 1);
+      let trSum = 0;
+      let maxHigh = -Infinity;
+      let minLow = Infinity;
+      for (let i = 1; i < slice.length; i++) {
+        const c = slice[i];
+        const prev = slice[i - 1];
+        const tr = Math.max(c.high - c.low, Math.abs(c.high - prev.close), Math.abs(c.low - prev.close));
+        trSum += tr;
+        if (c.high > maxHigh) maxHigh = c.high;
+        if (c.low < minLow) minLow = c.low;
+      }
+      const priceRange = maxHigh - minLow;
+      if (priceRange > 0 && trSum > 0) {
+        const chop = 100 * (Math.log10(trSum / priceRange) / Math.log10(period));
+        choppinessIndex = Math.min(100, Math.max(0, Math.round(chop)));
+      }
+    }
+
     return MarketConditionsEngine.evaluateConditions(
       inst || {
         id: instrumentId,
@@ -42,7 +95,10 @@ export class MarketConditionsEngine {
         providerCapabilities: ['trades', 'candles'],
       },
       spread,
-      lastPrice
+      lastPrice,
+      volumeZScore,
+      realizedVolPct,
+      choppinessIndex
     );
   }
   /**
@@ -102,8 +158,9 @@ export class MarketConditionsEngine {
     inst: Instrument,
     spread: number,
     lastPrice: number,
-    volumeZScore = 1.8,
-    realizedVolPct = 24.5
+    volumeZScore = 0.0,
+    realizedVolPct = 25.0,
+    inputChoppiness?: number
   ): MarketConditionState {
     const sessionInfo = this.getCurrentSession(inst);
 
@@ -135,7 +192,9 @@ export class MarketConditionsEngine {
 
     // 6. Trend Structure & Choppiness Index (0 - 100)
     // Low choppiness = clean directional trend; High choppiness = random walk range
-    const choppinessIndex = Math.min(85, Math.max(22, 45 + (Math.sin(Date.now() / 60000) * 15)));
+    const choppinessIndex = inputChoppiness !== undefined
+      ? Math.min(100, Math.max(0, inputChoppiness))
+      : 50;
     let trendStructure: TrendStructure = 'RANGE_BOUND';
     if (choppinessIndex < 38) trendStructure = 'CLEAN_TREND';
     else if (choppinessIndex > 62) trendStructure = 'CHOPPY';

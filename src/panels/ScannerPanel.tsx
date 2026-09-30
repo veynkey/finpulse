@@ -64,9 +64,14 @@ export default function ScannerPanel() {
       <PanelHeader
         title="FINQL SCANNER & SCREENER"
         actions={
-          <span className="text-[10px] text-muted">
-            MATCHES: <span className="text-text font-bold">{results.length}</span>
-          </span>
+          <div className="flex items-center space-x-2">
+            <span className="px-1.5 py-0.5 rounded bg-yellow-500/15 text-yellow-400 border border-yellow-500/30 text-[9px] font-bold">
+              DEMO SEED
+            </span>
+            <span className="text-[10px] text-muted">
+              MATCHES: <span className="text-text font-bold">{results.length}</span>
+            </span>
+          </div>
         }
       />
 
@@ -163,6 +168,11 @@ export default function ScannerPanel() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Info notice */}
+      <div className="px-2 py-1 bg-[#111318] border-t border-border/40 text-[10px] text-muted flex items-center justify-between">
+        <span>FinQL scanner running in preview mode on illustrative sample dataset.</span>
       </div>
     </div>
   );

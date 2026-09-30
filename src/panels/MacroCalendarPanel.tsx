@@ -3,11 +3,10 @@ import type { MacroEvent } from '../types';
 import PanelHeader from './PanelHeader';
 import { Calendar, Clock, AlertCircle, ExternalLink, Search } from 'lucide-react';
 
-// ---------------------------------------------------------------------------
-// Reference point: 2026-09-23 14:40 UTC (today, Tuesday)
-// All timestamps are offsets from this anchor so the calendar stays coherent.
-// ---------------------------------------------------------------------------
-const REF = new Date('2026-09-23T14:40:00Z').getTime();
+// Anchor timestamps dynamically relative to current day at 12:00 UTC so the timeline remains active and realistic
+const todayNoon = new Date();
+todayNoon.setUTCHours(12, 0, 0, 0);
+const REF = todayNoon.getTime();
 
 // Helper: ms from REF
 const h = (hours: number) => REF + hours * 3_600_000;
@@ -749,7 +748,10 @@ export default function MacroCalendarPanel() {
       <PanelHeader
         title="GLOBAL MACROECONOMIC CALENDAR"
         actions={
-          <div className="flex items-center space-x-1 text-[10px] text-muted">
+          <div className="flex items-center space-x-1.5 text-[10px] text-muted">
+            <span className="px-1.5 py-0.5 rounded bg-surface text-muted border border-border/50 text-[9px] font-bold">
+              REFERENCE CALENDAR
+            </span>
             <Calendar className="w-3 h-3 text-accent" />
             <span>UTC TIME</span>
           </div>

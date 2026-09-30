@@ -196,7 +196,6 @@ class NewsService {
         summary: cleanDesc.slice(0, 300) || item.title || '',
         sourceUrl: item.link || 'https://cointelegraph.com',
         imageUrl: img,
-        clusteredCount: 5 + (idx % 7),
       }, ['CRYPTO']);
     });
   }
@@ -221,7 +220,6 @@ class NewsService {
         summary: cleanDesc.slice(0, 300) || item.title || '',
         sourceUrl: item.link || 'https://www.coindesk.com',
         imageUrl: img,
-        clusteredCount: 6 + (idx % 8),
       }, ['CRYPTO']);
     });
   }
@@ -246,7 +244,6 @@ class NewsService {
         summary: cleanDesc.slice(0, 300) || item.title || '',
         sourceUrl: item.link || 'https://decrypt.co',
         imageUrl: img,
-        clusteredCount: 5 + (idx % 6),
       }, ['CRYPTO']);
     });
   }
@@ -268,7 +265,6 @@ class NewsService {
         headline: item.title || '',
         summary: cleanDesc.slice(0, 300) || item.title || '',
         sourceUrl: item.link || 'https://www.marketwatch.com',
-        clusteredCount: 8 + (idx % 9),
       }, ['EQUITIES', 'MACRO']);
     });
   }
@@ -290,7 +286,6 @@ class NewsService {
         headline: item.title || '',
         summary: cleanDesc.slice(0, 300) || item.title || '',
         sourceUrl: item.link || 'https://www.wsj.com',
-        clusteredCount: 10 + (idx % 7),
       }, ['EQUITIES', 'MACRO']);
     });
   }
@@ -312,7 +307,6 @@ class NewsService {
         headline: item.title || '',
         summary: cleanDesc.slice(0, 300) || item.title || '',
         sourceUrl: item.link || 'https://finance.yahoo.com',
-        clusteredCount: 4 + (idx % 6),
       }, ['EQUITIES']);
     });
   }
@@ -335,7 +329,6 @@ class NewsService {
         headline: art.title || '',
         summary: `Official exchange announcement: ${art.title}. Direct listing and trading operations details available on Binance.`,
         sourceUrl: `https://www.binance.com/en/support/announcement/${code}`,
-        clusteredCount: 12 + (idx % 10),
       }, ['CRYPTO', 'REGULATORY']);
     });
   }
@@ -402,7 +395,7 @@ class NewsService {
       tags: Array.from(tags),
       sourceUrl: base.sourceUrl,
       imageUrl: base.imageUrl,
-      clusteredCount: base.clusteredCount || 3,
+      clusteredCount: base.clusteredCount,
     };
   }
 }
