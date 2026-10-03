@@ -25,6 +25,7 @@ import {
   Info,
   Link2,
   Unlink,
+  BarChart2,
 } from 'lucide-react';
 import { useTerminal } from '../context/TerminalContext';
 import { marketData } from '../services/marketData';
@@ -48,8 +49,184 @@ import type {
   DrawingItem,
   PositionToolConfig,
   MarketConditionState,
+  Candle,
 } from '../types';
 import PanelHeader from './PanelHeader';
+
+interface FRVPBucket {
+  price: number;
+  lowPrice: number;
+  highPrice: number;
+  buyVol: number;
+  sellVol: number;
+  totalVol: number;
+  isPoc: boolean;
+  isValueArea: boolean;
+}
+
+interface FRVPResult {
+  buckets: FRVPBucket[];
+  pocPrice: number;
+  vahPrice: number;
+  valPrice: number;
+  totalVol: number;
+  totalBuyVol: number;
+  totalSellVol: number;
+  buyPct: number;
+  sellPct: number;
+  maxBucketVol: number;
+  candleCount: number;
+  swingLow: number;
+  swingHigh: number;
+}
+
+function calculateFRVP(
+  allCandles: Candle[],
+  timeA: number,
+  timeB: number,
+  priceA?: number,
+  priceB?: number
+): FRVPResult | null {
+  if (!allCandles || allCandles.length === 0) return null;
+
+  const tStart = Math.min(timeA, timeB);
+  const tEnd = Math.max(timeA, timeB);
+
+  let filtered = allCandles.filter((c) => c.time >= tStart && c.time <= tEnd);
+
+  if (filtered.length === 0) {
+    const sorted = [...allCandles].sort(
+      (a, b) => Math.abs(a.time - tStart) - Math.abs(b.time - tStart)
+    );
+    filtered = sorted.slice(0, 10).sort((a, b) => a.time - b.time);
+  }
+
+  if (filtered.length === 0) return null;
+
+  let swingLow = Math.min(...filtered.map((c) => c.low));
+  let swingHigh = Math.max(...filtered.map((c) => c.high));
+
+  if (!Number.isFinite(swingLow) || !Number.isFinite(swingHigh) || swingHigh <= swingLow) {
+    const pMin = Math.min(priceA ?? 1, priceB ?? 1);
+    const pMax = Math.max(priceA ?? 1, priceB ?? 1);
+    swingLow = pMin > 0 ? pMin : 1;
+    swingHigh = pMax > swingLow ? pMax : swingLow + 1;
+  }
+
+  const bucketCount = 24;
+  const step = (swingHigh - swingLow) / bucketCount;
+
+  const buckets: FRVPBucket[] = Array.from({ length: bucketCount }, (_, i) => ({
+    price: swingLow + step * (i + 0.5),
+    lowPrice: swingLow + step * i,
+    highPrice: swingLow + step * (i + 1),
+    buyVol: 0,
+    sellVol: 0,
+    totalVol: 0,
+    isPoc: false,
+    isValueArea: false,
+  }));
+
+  let totalVol = 0;
+  let totalBuyVol = 0;
+  let totalSellVol = 0;
+
+  for (const c of filtered) {
+    totalVol += c.volume;
+    let bVol = 0;
+    let sVol = 0;
+
+    if (typeof c.takerBuyVolume === 'number' && Number.isFinite(c.takerBuyVolume)) {
+      bVol = c.takerBuyVolume;
+      sVol = Math.max(0, c.volume - bVol);
+    } else {
+      const rng = c.high - c.low || 0.0001;
+      const ratio = Math.max(0.05, Math.min(0.95, (c.close - c.low) / rng));
+      bVol = c.volume * ratio;
+      sVol = c.volume * (1 - ratio);
+    }
+
+    totalBuyVol += bVol;
+    totalSellVol += sVol;
+
+    const lowIdx = Math.max(0, Math.min(bucketCount - 1, Math.floor((c.low - swingLow) / step)));
+    const highIdx = Math.max(0, Math.min(bucketCount - 1, Math.floor((c.high - swingLow) / step)));
+    const span = Math.max(1, highIdx - lowIdx + 1);
+
+    const vPer = c.volume / span;
+    const bPer = bVol / span;
+    const sPer = sVol / span;
+
+    for (let k = lowIdx; k <= highIdx; k++) {
+      buckets[k].totalVol += vPer;
+      buckets[k].buyVol += bPer;
+      buckets[k].sellVol += sPer;
+    }
+  }
+
+  // Tentukan POC (Point of Control)
+  let maxBucketVol = 0;
+  let pocIdx = 0;
+  for (let i = 0; i < bucketCount; i++) {
+    if (buckets[i].totalVol > maxBucketVol) {
+      maxBucketVol = buckets[i].totalVol;
+      pocIdx = i;
+    }
+  }
+  buckets[pocIdx].isPoc = true;
+  const pocPrice = buckets[pocIdx].price;
+
+  // Hitung Value Area 70%
+  const targetVa = totalVol * 0.7;
+  let vaVol = buckets[pocIdx].totalVol;
+  buckets[pocIdx].isValueArea = true;
+
+  let upperIdx = pocIdx;
+  let lowerIdx = pocIdx;
+
+  while (vaVol < targetVa && (upperIdx < bucketCount - 1 || lowerIdx > 0)) {
+    const nextUpVol = upperIdx < bucketCount - 1 ? buckets[upperIdx + 1].totalVol : -1;
+    const nextDownVol = lowerIdx > 0 ? buckets[lowerIdx - 1].totalVol : -1;
+
+    if (nextUpVol >= nextDownVol && upperIdx < bucketCount - 1) {
+      upperIdx++;
+      vaVol += buckets[upperIdx].totalVol;
+      buckets[upperIdx].isValueArea = true;
+    } else if (lowerIdx > 0) {
+      lowerIdx--;
+      vaVol += buckets[lowerIdx].totalVol;
+      buckets[lowerIdx].isValueArea = true;
+    } else if (upperIdx < bucketCount - 1) {
+      upperIdx++;
+      vaVol += buckets[upperIdx].totalVol;
+      buckets[upperIdx].isValueArea = true;
+    } else {
+      break;
+    }
+  }
+
+  const vahPrice = buckets[upperIdx].highPrice;
+  const valPrice = buckets[lowerIdx].lowPrice;
+
+  const buyPct = totalVol > 0 ? (totalBuyVol / totalVol) * 100 : 50;
+  const sellPct = totalVol > 0 ? (totalSellVol / totalVol) * 100 : 50;
+
+  return {
+    buckets,
+    pocPrice,
+    vahPrice,
+    valPrice,
+    totalVol,
+    totalBuyVol,
+    totalSellVol,
+    buyPct,
+    sellPct,
+    maxBucketVol: Math.max(1, maxBucketVol),
+    candleCount: filtered.length,
+    swingLow,
+    swingHigh,
+  };
+}
 
 interface ChartPanelProps {
   defaultGroup?: LinkGroup;
@@ -120,7 +297,23 @@ export default function ChartPanel({
 
   // Drawings state
   const [drawings, setDrawings] = useState<DrawingItem[]>([]);
-  const [currentDrawingPoints, setCurrentDrawingPoints] = useState<{ x: number; y: number }[]>([]);
+  const [currentDrawingPoints, setCurrentDrawingPoints] = useState<
+    { x: number; y: number; time?: number; price?: number }[]
+  >([]);
+  const [, setViewportVersion] = useState(0);
+
+  // Global Escape key listener to cancel active drawing
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setActiveTool('cursor');
+        setCurrentDrawingPoints([]);
+        setPositionType(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   // Position Risk/Reward tool state
   const [positionConfig, setPositionConfig] = useState<PositionToolConfig | null>(null);
@@ -266,6 +459,7 @@ export default function ChartPanel({
 
     // Continuous Logical Range 60fps pan/zoom sync
     const onSyncLogicalRangeChange = (logicalRange: any) => {
+      setViewportVersion((v) => (v + 1) % 100000);
       if (!isSyncEnabledRef.current) return;
       if (!logicalRange || isSyncingRangeRef.current) return;
       if (typeof logicalRange.from === 'number' && typeof logicalRange.to === 'number') {
@@ -798,6 +992,7 @@ export default function ChartPanel({
               width: Math.floor(entry.contentRect.width),
               height: Math.floor(entry.contentRect.height),
             });
+            setViewportVersion((v) => (v + 1) % 100000);
           }
         }
       });
@@ -907,20 +1102,59 @@ export default function ChartPanel({
       };
       persistDrawings([...drawings, newItem]);
       setActiveTool('cursor');
-    } else if (activeTool === 'trendline' || activeTool === 'fib_retracement' || activeTool === 'rectangle') {
+    } else if (
+      activeTool === 'trendline' ||
+      activeTool === 'fib_retracement' ||
+      activeTool === 'rectangle' ||
+      activeTool === 'fixed_range_volume_profile'
+    ) {
+      let clickedTime: number | null = null;
+      let clickedPrice: number | null = null;
+
+      try {
+        const t = chartRef.current?.timeScale?.()?.coordinateToTime?.(x);
+        if (typeof t === 'number') clickedTime = t;
+      } catch {}
+
+      try {
+        const p = mainSeriesRef.current?.coordinateToPrice?.(y);
+        if (typeof p === 'number' && Number.isFinite(p)) clickedPrice = p;
+      } catch {}
+
       if (currentDrawingPoints.length === 0) {
-        setCurrentDrawingPoints([{ x, y }]);
+        setCurrentDrawingPoints([
+          {
+            x,
+            y,
+            time: clickedTime ?? Math.floor(Date.now() / 1000),
+            price: clickedPrice ?? lastStats.close,
+          },
+        ]);
       } else {
+        const p1 = currentDrawingPoints[0];
+        const p2 = {
+          x,
+          y,
+          time: clickedTime ?? Math.floor(Date.now() / 1000),
+          price: clickedPrice ?? lastStats.close,
+        };
+
         const newItem: DrawingItem = {
           id: `draw_${Date.now()}`,
           tool: activeTool,
           symbol: activeInstrument.id,
-          points: [{ time: Date.now(), price: lastStats.close }],
+          points: [
+            { time: Number(p1.time) || Math.floor(Date.now() / 1000), price: Number(p1.price) || lastStats.close },
+            { time: Number(p2.time) || Math.floor(Date.now() / 1000), price: Number(p2.price) || lastStats.close },
+          ],
           settings: {
-            p1: currentDrawingPoints[0],
-            p2: { x, y },
+            p1,
+            p2,
           },
-          color: activeTool === 'fib_retracement' ? '#00e5ff' : '#0070f3',
+          color:
+            activeTool === 'fib_retracement' || activeTool === 'fixed_range_volume_profile'
+              ? '#00e5ff'
+              : '#0070f3',
         };
         persistDrawings([...drawings, newItem]);
         setCurrentDrawingPoints([]);
@@ -1370,6 +1604,26 @@ export default function ChartPanel({
           <button
             type="button"
             onClick={() => {
+              setActiveTool((prev) => (prev === 'fixed_range_volume_profile' ? 'cursor' : 'fixed_range_volume_profile'));
+              setPositionType(null);
+              setCurrentDrawingPoints([]);
+            }}
+            className={`p-1.5 rounded transition-colors relative ${
+              activeTool === 'fixed_range_volume_profile'
+                ? 'bg-accent text-white shadow-sm shadow-accent/50'
+                : 'hover:bg-surface hover:text-text'
+            }`}
+            title="Fixed Range Volume Profile (FRVP) - Klik 2 titik (Awal swing & Akhir swing) untuk melihat POC dan distribusi volume"
+          >
+            <BarChart2 size={13} />
+            {activeTool === 'fixed_range_volume_profile' && (
+              <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 bg-warning rounded-full ring-1 ring-black" />
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => {
               setPositionType(positionType === 'LONG' ? null : 'LONG');
             }}
             className={`p-1.5 rounded transition-colors ${
@@ -1524,20 +1778,341 @@ export default function ChartPanel({
                   </text>
                 );
               }
+              if (d.tool === 'fixed_range_volume_profile' && d.settings?.p1 && d.settings?.p2) {
+                const p1 = d.settings.p1;
+                const p2 = d.settings.p2;
+                const t1 = Number(p1.time) || 0;
+                const t2 = Number(p2.time) || 0;
+
+                const candles = marketData.getHistoricalCandles(activeInstrument.id, timeframe);
+                const frvp = calculateFRVP(candles, t1, t2, p1.price, p2.price);
+                if (!frvp) return null;
+
+                let x1 = p1.x;
+                let x2 = p2.x;
+                if (chartRef.current?.timeScale) {
+                  try {
+                    const c1 = chartRef.current.timeScale().timeToCoordinate(t1 as any);
+                    const c2 = chartRef.current.timeScale().timeToCoordinate(t2 as any);
+                    if (c1 !== null && Number.isFinite(c1)) x1 = c1;
+                    if (c2 !== null && Number.isFinite(c2)) x2 = c2;
+                  } catch {}
+                }
+
+                const minX = Math.min(x1, x2);
+                const maxX = Math.max(x1, x2);
+                const rangeWidth = Math.max(80, maxX - minX);
+                const maxBarWidth = Math.min(rangeWidth * 0.45, 180);
+
+                const getPriceCoordY = (price: number, fallbackY: number) => {
+                  if (mainSeriesRef.current?.priceToCoordinate) {
+                    try {
+                      const y = mainSeriesRef.current.priceToCoordinate(price);
+                      if (y !== null && Number.isFinite(y)) return y;
+                    } catch {}
+                  }
+                  return fallbackY;
+                };
+
+                const highY = getPriceCoordY(frvp.swingHigh, Math.min(p1.y, p2.y));
+                const lowY = getPriceCoordY(frvp.swingLow, Math.max(p1.y, p2.y));
+                const minY = Math.min(highY, lowY);
+                const maxY = Math.max(highY, lowY);
+                const areaHeight = Math.max(20, maxY - minY);
+
+                const pocY = getPriceCoordY(frvp.pocPrice, (minY + maxY) / 2);
+                const vahY = getPriceCoordY(frvp.vahPrice, minY + areaHeight * 0.2);
+                const valY = getPriceCoordY(frvp.valPrice, minY + areaHeight * 0.8);
+
+                const formatFRVPVol = (num: number) => {
+                  if (Math.abs(num) >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+                  if (Math.abs(num) >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+                  return Math.round(num).toLocaleString();
+                };
+
+                const badgeWidth = Math.max(280, rangeWidth);
+                const badgeY = Math.max(6, minY - 22);
+
+                return (
+                  <g key={d.id} className="select-none">
+                    {/* Shaded Area of the Swing Range */}
+                    <rect
+                      x={minX}
+                      y={minY}
+                      width={rangeWidth}
+                      height={areaHeight}
+                      fill="#0070f3"
+                      fillOpacity={0.05}
+                      stroke="#00e5ff"
+                      strokeOpacity={0.25}
+                      strokeDasharray="3 3"
+                    />
+
+                    {/* Vertical Range Boundaries (Point A and Point B) */}
+                    <line
+                      x1={minX}
+                      y1={0}
+                      x2={minX}
+                      y2="100%"
+                      stroke="#00e5ff"
+                      strokeWidth={1}
+                      strokeDasharray="4 3"
+                      strokeOpacity={0.4}
+                    />
+                    <line
+                      x1={maxX}
+                      y1={0}
+                      x2={maxX}
+                      y2="100%"
+                      stroke="#00e5ff"
+                      strokeWidth={1}
+                      strokeDasharray="4 3"
+                      strokeOpacity={0.4}
+                    />
+
+                    {/* Horizontal Volume Profile Buckets */}
+                    {frvp.buckets.map((b, idx) => {
+                      const by1 = getPriceCoordY(b.highPrice, minY + (idx / frvp.buckets.length) * areaHeight);
+                      const by2 = getPriceCoordY(b.lowPrice, minY + ((idx + 1) / frvp.buckets.length) * areaHeight);
+                      const bTop = Math.min(by1, by2);
+                      const bHeight = Math.max(2, Math.abs(by2 - by1));
+
+                      const barRatio = frvp.maxBucketVol > 0 ? b.totalVol / frvp.maxBucketVol : 0;
+                      const totalBarW = barRatio * maxBarWidth;
+                      const buyW = b.totalVol > 0 ? (b.buyVol / b.totalVol) * totalBarW : 0;
+                      const sellW = Math.max(0, totalBarW - buyW);
+
+                      const isVa = b.isValueArea;
+                      const buyOpacity = isVa ? 0.65 : 0.25;
+                      const sellOpacity = isVa ? 0.65 : 0.25;
+
+                      return (
+                        <g key={idx}>
+                          {buyW > 0 && (
+                            <rect
+                              x={minX}
+                              y={bTop}
+                              width={buyW}
+                              height={Math.max(1, bHeight - 1)}
+                              fill="#00c853"
+                              fillOpacity={buyOpacity}
+                            />
+                          )}
+                          {sellW > 0 && (
+                            <rect
+                              x={minX + buyW}
+                              y={bTop}
+                              width={sellW}
+                              height={Math.max(1, bHeight - 1)}
+                              fill="#ff3d00"
+                              fillOpacity={sellOpacity}
+                            />
+                          )}
+                        </g>
+                      );
+                    })}
+
+                    {/* VAH Line and Label */}
+                    <line
+                      x1={minX}
+                      y1={vahY}
+                      x2={maxX}
+                      y2={vahY}
+                      stroke="#00e5ff"
+                      strokeWidth={1.2}
+                      strokeDasharray="4 2"
+                      strokeOpacity={0.8}
+                    />
+                    <text
+                      x={maxX + 4}
+                      y={vahY + 3}
+                      fill="#00e5ff"
+                      fontSize={9}
+                      fontFamily="monospace"
+                      fontWeight="bold"
+                    >
+                      VAH ${frvp.vahPrice.toFixed(activeInstrument.priceDecimals)}
+                    </text>
+
+                    {/* VAL Line and Label */}
+                    <line
+                      x1={minX}
+                      y1={valY}
+                      x2={maxX}
+                      y2={valY}
+                      stroke="#00e5ff"
+                      strokeWidth={1.2}
+                      strokeDasharray="4 2"
+                      strokeOpacity={0.8}
+                    />
+                    <text
+                      x={maxX + 4}
+                      y={valY + 3}
+                      fill="#00e5ff"
+                      fontSize={9}
+                      fontFamily="monospace"
+                      fontWeight="bold"
+                    >
+                      VAL ${frvp.valPrice.toFixed(activeInstrument.priceDecimals)}
+                    </text>
+
+                    {/* POC Line (Yellow Solid Highlight) */}
+                    <line
+                      x1={minX}
+                      y1={pocY}
+                      x2={maxX}
+                      y2={pocY}
+                      stroke="#ffeb3b"
+                      strokeWidth={2}
+                    />
+                    {/* POC Label Badge */}
+                    <g>
+                      <rect
+                        x={maxX + 4}
+                        y={pocY - 8}
+                        width={90}
+                        height={16}
+                        rx={2}
+                        fill="#ffeb3b"
+                      />
+                      <text
+                        x={maxX + 8}
+                        y={pocY + 4}
+                        fill="#000000"
+                        fontSize={9}
+                        fontFamily="monospace"
+                        fontWeight="bold"
+                      >
+                        POC ${frvp.pocPrice.toFixed(activeInstrument.priceDecimals)}
+                      </text>
+                    </g>
+
+                    {/* Swing Info Summary Badge on Top */}
+                    <g>
+                      <rect
+                        x={minX}
+                        y={badgeY}
+                        width={badgeWidth}
+                        height={18}
+                        rx={3}
+                        fill="#111317"
+                        fillOpacity={0.92}
+                        stroke="#00e5ff"
+                        strokeOpacity={0.4}
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={minX + 6}
+                        y={badgeY + 12}
+                        fill="#e0e0e0"
+                        fontSize={9}
+                        fontFamily="monospace"
+                      >
+                        FRVP ({frvp.candleCount} bar): POC ${frvp.pocPrice.toFixed(activeInstrument.priceDecimals)} | Buy {frvp.buyPct.toFixed(0)}% vs Sell {frvp.sellPct.toFixed(0)}% ({formatFRVPVol(frvp.totalVol)})
+                      </text>
+                      {/* Delete button (X) */}
+                      <g
+                        className="cursor-pointer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          persistDrawings(drawings.filter((item) => item.id !== d.id));
+                        }}
+                      >
+                        <circle
+                          cx={minX + badgeWidth - 10}
+                          y={badgeY + 9}
+                          r={6}
+                          fill="#ff3d00"
+                          fillOpacity={0.8}
+                        />
+                        <text
+                          x={minX + badgeWidth - 10}
+                          y={badgeY + 12}
+                          fill="#ffffff"
+                          fontSize={8}
+                          fontFamily="monospace"
+                          fontWeight="bold"
+                          textAnchor="middle"
+                        >
+                          x
+                        </text>
+                      </g>
+                    </g>
+                  </g>
+                );
+              }
               return null;
             })}
 
             {/* Currently drawing preview */}
             {currentDrawingPoints.length > 0 && (
-              <circle
-                cx={currentDrawingPoints[0].x}
-                cy={currentDrawingPoints[0].y}
-                r={4}
-                fill="#0070f3"
-                className="animate-ping"
-              />
+              <g>
+                <circle
+                  cx={currentDrawingPoints[0].x}
+                  cy={currentDrawingPoints[0].y}
+                  r={4}
+                  fill="#0070f3"
+                  className="animate-ping"
+                />
+                {activeTool === 'fixed_range_volume_profile' && (
+                  <>
+                    <line
+                      x1={currentDrawingPoints[0].x}
+                      y1={0}
+                      x2={currentDrawingPoints[0].x}
+                      y2="100%"
+                      stroke="#00e5ff"
+                      strokeWidth={1.5}
+                      strokeDasharray="4 2"
+                    />
+                    <rect
+                      x={currentDrawingPoints[0].x + 4}
+                      y={Math.max(10, currentDrawingPoints[0].y - 20)}
+                      width={140}
+                      height={18}
+                      rx={3}
+                      fill="#111317"
+                      fillOpacity={0.9}
+                      stroke="#00e5ff"
+                      strokeWidth={1}
+                    />
+                    <text
+                      x={currentDrawingPoints[0].x + 8}
+                      y={Math.max(10, currentDrawingPoints[0].y - 20) + 12}
+                      fill="#00e5ff"
+                      fontSize={9}
+                      fontFamily="monospace"
+                      fontWeight="bold"
+                    >
+                      Titik A (Awal Swing)
+                    </text>
+                  </>
+                )}
+              </g>
             )}
           </svg>
+
+          {/* FRVP Drawing Helper Floating Banner */}
+          {activeTool === 'fixed_range_volume_profile' && (
+            <div className="absolute top-2 left-10 z-30 bg-[#141720]/95 border border-accent/60 backdrop-blur-md rounded px-3 py-1.5 shadow-xl flex items-center space-x-2 text-[11px] text-text font-mono">
+              <div className="w-2 h-2 rounded-full bg-accent animate-ping" />
+              <span>
+                {currentDrawingPoints.length === 0
+                  ? 'Mode FRVP: Klik Titik A pada chart (awal swing / impuls harga)'
+                  : 'Mode FRVP: Titik A terkunci. Klik Titik B (akhir swing) untuk mengunci volume profile'}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTool('cursor');
+                  setCurrentDrawingPoints([]);
+                }}
+                className="ml-2 px-1.5 py-0.5 rounded bg-surface hover:bg-white/10 text-muted hover:text-white text-[10px]"
+              >
+                Batal (Esc)
+              </button>
+            </div>
+          )}
 
           {/* Long / Short Position Calculator Overlay Card */}
           {positionType && positionConfig && rrCalculation && (

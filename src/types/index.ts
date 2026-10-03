@@ -222,6 +222,7 @@ export type DrawingTool =
   | 'ray'
   | 'parallel_channel'
   | 'fib_retracement'
+  | 'fixed_range_volume_profile'
   | 'rectangle'
   | 'text'
   | 'long_position'
